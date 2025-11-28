@@ -1,58 +1,134 @@
 {
-  "actions": [],
-  "allow_copy": 0,
-  "allow_guest_to_view": 0,
-  "allow_import": 1,
-  "allow_rename": 1,
-  "autoname": "field:subreddit_name",
-  "creation": "2025-11-21 18:30:00.000000",
-  "doctype": "DocType",
-  "document_type": "Setup",
-  "engine": "InnoDB",
-  "field_order": [
-    "main_section",
-    "subreddit_name",
-    "group",
-    "column_break_1",
-    "title_prompt",
-    "title_examples",
-    "body_examples",
-    "section_advanced",
-    "body_exclusion_words",
-    "gpt_instructions",
-    "column_break_2",
-    "posting_rules",
-    "flair_and_tags",
-    "section_stats",
-    "usage_count",
-    "success_rate",
-    "last_used",
-    "is_active"
-  ],
-  "fields": [
-    { "fieldname": "main_section", "fieldtype": "Section Break", "label": "Basic Information" },
-    { "fieldname": "subreddit_name", "fieldtype": "Data", "label": "Subreddit Name", "reqd": 1, "unique": 1 },
-    { "fieldname": "group", "fieldtype": "Select", "label": "Region Group", "options": "EAST\nWEST\npacific\ncanada\nOther", "reqd": 1, "default": "EAST" },
-    { "fieldname": "column_break_1", "fieldtype": "Column Break" },
-    { "fieldname": "title_prompt", "fieldtype": "Small Text", "label": "Title Prompt / Required Format" },
-    { "fieldname": "title_examples", "fieldtype": "JSON", "label": "Title Examples (array)", "default": "[]" },
-    { "fieldname": "body_examples", "fieldtype": "JSON", "label": "Body Text Examples (array)", "default": "[]" },
-    { "fieldname": "section_advanced", "fieldtype": "Section Break", "label": "Advanced Templates & AI" },
-    { "fieldname": "body_exclusion_words", "fieldtype": "JSON", "label": "Body Exclusion Words (array)", "default": "[]" },
-    { "fieldname": "gpt_instructions", "fieldtype": "Text Editor", "label": "Full GPT Prompt / Instructions", "reqd": 1 },
-    { "fieldname": "column_break_2", "fieldtype": "Column Break" },
-    { "fieldname": "posting_rules", "fieldtype": "Text Editor", "label": "Posting Rules & Title Format" },
-    { "fieldname": "flair_and_tags", "fieldtype": "Text Editor", "label": "Flair & Tag Requirements" },
-    { "fieldname": "section_stats", "fieldtype": "Section Break", "label": "Usage Statistics" },
-    { "fieldname": "usage_count", "fieldtype": "Int", "label": "Usage Count", "default": "0", "read_only": 1 },
-    { "fieldname": "success_rate", "fieldtype": "Percent", "label": "Success Rate (%)", "default": "0", "read_only": 1 },
-    { "fieldname": "last_used", "fieldtype": "Datetime", "label": "Last Used", "read_only": 1 },
-    { "fieldname": "is_active", "fieldtype": "Check", "label": "Is Active", "default": 1 }
-  ],
-  "icon": "fa fa-reddit-alien",
-  "index_web_pages_for_search": 1,
-  "links": [],
-  "modified": "2025-11-21 18:30:00",
+ "actions": [],
+ "allow_copy": 0,
+ "allow_guest_to_view": 0,
+ "allow_import": 1,
+ "allow_rename": 1,
+ "autoname": "field:sub",
+ "creation": "2025-11-21 18:30:00.000000",
+ "doctype": "DocType",
+ "document_type": "Setup",
+ "engine": "InnoDB",
+ "field_order": [
+  "main_section",
+  "group",
+  "sub",
+  "column_break_1",
+  "title_prompt",
+  "title_example",
+  "section_advanced",
+  "body_exclusion_words",
+  "body_example",
+  "rules",
+  "prompt",
+  "section_stats",
+  "usage_count",
+  "success_rate",
+  "last_used",
+  "is_active"
+ ],
+ "fields": [
+  {
+   "fieldname": "main_section",
+   "fieldtype": "Section Break",
+   "label": "Basic Information"
+  },
+  {
+   "default": "East",
+   "fieldname": "group",
+   "fieldtype": "Select",
+   "label": "Group",
+   "options": "East\nWest\nPacific\nCanada\nOther",
+   "reqd": 1
+  },
+  {
+   "fieldname": "sub",
+   "fieldtype": "Data",
+   "label": "Sub",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "title_prompt",
+   "fieldtype": "Small Small Text",
+   "label": "Title Prompt"
+  },
+  {
+   "default": "",
+   "description": "Enter examples here (one per line)",
+   "fieldname": "title_example",
+   "fieldtype": "Small Text",
+   "label": "Title Example"
+  },
+  {
+   "fieldname": "section_advanced",
+   "fieldtype": "Section Break",
+   "label": "Advanced Templates"
+  },
+  {
+   "default": "",
+   "description": "Words to exclude (comma separated or one per line)",
+   "fieldname": "body_exclusion_words",
+   "fieldtype": "Small Text",
+   "label": "Body Exclusion Words"
+  },
+  {
+   "default": "",
+   "fieldname": "body_example",
+   "fieldtype": "Small Text",
+   "label": "Body Example"
+  },
+  {
+   "fieldname": "rules",
+   "fieldtype": "Small Text",
+   "label": "Rules"
+  },
+  {
+   "fieldname": "prompt",
+   "fieldtype": "Small Text",
+   "label": "Prompt",
+   "reqd": 1
+  },
+  {
+   "fieldname": "section_stats",
+   "fieldtype": "Section Break",
+   "label": "Usage Statistics"
+  },
+  {
+   "default": "0",
+   "fieldname": "usage_count",
+   "fieldtype": "Int",
+   "label": "Usage Count",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "success_rate",
+   "fieldtype": "Percent",
+   "label": "Success Rate (%)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_used",
+   "fieldtype": "Datetime",
+   "label": "Last Used",
+   "read_only": 1
+  },
+  {
+   "default": "1",
+   "fieldname": "is_active",
+   "fieldtype": "Check",
+   "label": "Is Active"
+  }
+ ],
+ "icon": "fa fa-reddit-alien",
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2025-11-21 18:30:00",
   "modified_by": "Administrator",
   "module": "Reddit-Postmachine",
   "name": "Subreddit Template",
@@ -74,6 +150,6 @@
   ],
   "sort_field": "modified",
   "sort_order": "DESC",
-  "title_field": "subreddit_name",
+  "title_field": "sub",
   "track_changes": 1
 }
