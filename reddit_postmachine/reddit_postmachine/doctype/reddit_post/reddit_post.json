@@ -78,7 +78,7 @@
    "fieldname": "subreddit_group",
    "fieldtype": "Select",
    "label": "Subreddit Group",
-   "options": "East\nWest",
+   "options": "East\nWest\nPacific\nCanada\nOther",
    "reqd": 1
   },
   {

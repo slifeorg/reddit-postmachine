@@ -9,58 +9,62 @@ class SubredditTemplate(Document):
 
 @frappe.whitelist()
 def generate_post_from_template(template_name):
+    """
+    Генерує та створює новий документ Reddit Post (викликається з кнопки на шаблоні)
+    """
     try:
+        # 1. Перевірка шаблону
         if not frappe.db.exists("Subreddit Template", template_name):
             frappe.throw(f"Template '{template_name}' not found")
         
         template = frappe.get_doc("Subreddit Template", template_name)
 
-        api_key = "API KEY HERE"
+        # 2. ОТРИМАННЯ API KEY З DOCTYPE "KEYS"
+        key_doc_name = frappe.db.get_value("Keys", {}, "name")
+        if not key_doc_name:
+            frappe.throw("No 'Keys' record found. Please create one.")
+            
+        api_key = frappe.get_doc("Keys", key_doc_name).get_password("api_key")
         
+        if not api_key:
+             frappe.throw("The API Key field is empty in the 'Keys' document.")
+
         client = OpenAI(api_key=api_key)
 
-        instructions = strip_html(template.gpt_instructions) if template.gpt_instructions else "Create viral content."
-        rules = strip_html(template.posting_rules) if template.posting_rules else "No specific rules."
+        # 3. Підготовка промпта
+        instructions = strip_html(template.prompt) if template.prompt else "Create viral content."
+        rules = strip_html(template.rules) if template.rules else "No specific rules."
+        exclusions = template.body_exclusion_words if template.body_exclusion_words else ""
         
+        # 4. JSON Schema
         json_schema = {
             "name": "reddit_post_response",
             "strict": True,
             "schema": {
                 "type": "object",
                 "properties": {
-                    "title": {
-                        "type": "string",
-                        "description": "Engaging title for the Reddit post"
-                    },
-                    "post_type": {
-                        "type": "string",
-                        "enum": ["Text", "Link"],
-                        "description": "Must be 'Link' if sharing a URL, otherwise 'Text'"
-                    },
-                    "url_to_share": {
-                        "type": "string",
-                        "description": "Valid URL (e.g. Youtube) if post_type is Link. Empty string if Text."
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "Body text or hashtags."
-                    }
+                    "title": { "type": "string", "description": "Engaging title" },
+                    "post_type": { "type": "string", "enum": ["Text", "Link"] },
+                    "url_to_share": { "type": "string", "description": "URL if Link type, else empty" },
+                    "content": { "type": "string", "description": "Body text" },
+                    "hashtags": { "type": "string", "description": "Relevant hashtags" }
                 },
-                "required": ["title", "post_type", "url_to_share", "content"],
+                "required": ["title", "post_type", "url_to_share", "content", "hashtags"],
                 "additionalProperties": False
             }
         }
 
+        # 5. Запит до AI
         completion = client.chat.completions.create(
-            model="gpt-4o-2024-08-06", # Використовуємо модель, що підтримує Structured Outputs
+            model="gpt-4o-2024-08-06",
             messages=[
                 {
                     "role": "system", 
-                    "content": f"You are a Reddit expert managing r/{template.subreddit_name}. Group: {template.group}."
+                    "content": f"You are a Reddit expert managing r/{template.sub}. Group: {template.group}."
                 },
                 {
                     "role": "user", 
-                    "content": f"Generate a post based on these instructions:\n{instructions}\n\nRules:\n{rules}"
+                    "content": f"Generate a post.\nPrompt: {instructions}\nRules: {rules}\nAvoid: {exclusions}"
                 }
             ],
             response_format={
@@ -71,7 +75,8 @@ def generate_post_from_template(template_name):
 
         ai_response = json.loads(completion.choices[0].message.content)
 
-        account = frappe.db.get_value("Reddit Account", {"enabled": 1}, "name")
+        # 6. Пошук акаунту
+        account = frappe.db.get_value("Reddit Account", {"status": "Active", "is_posting_paused": 0}, "name")
         if not account:
             account = frappe.db.get_value("Reddit Account", {}, "name")
         
@@ -80,14 +85,15 @@ def generate_post_from_template(template_name):
 
         account_username = frappe.db.get_value("Reddit Account", account, "username")
 
+        # 7. Створення нового поста
         new_post = frappe.get_doc({
             "doctype": "Reddit Post",
             "title": ai_response.get("title"),
             "post_type": ai_response.get("post_type"),
             "url_to_share": ai_response.get("url_to_share"),
-            "body_text": ai_response.get("content"), # Якщо AI повертає все в 'content'
-            "hashtags": "", # Або налаштуйте AI, щоб він повертав hashtags окремо
-            "subreddit_name": template.subreddit_name,
+            "body_text": ai_response.get("content"),
+            "hashtags": ai_response.get("hashtags"),
+            "subreddit_name": template.sub,
             "subreddit_group": template.group,
             "account": account,
             "account_username": account_username or "Unknown",

@@ -1,0 +1,125 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2025-12-01 10:27:06.215494",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "username",
+  "section_break_oijy",
+  "airtable_id",
+  "password",
+  "status",
+  "working_schedule",
+  "subreddit_group",
+  "last_activity",
+  "is_posting_paused",
+  "active_post",
+  "posts_today_count",
+  "last_sync"
+ ],
+ "fields": [
+  {
+   "fieldname": "username",
+   "fieldtype": "Data",
+   "label": "Username",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "section_break_oijy",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "airtable_id",
+   "fieldtype": "Data",
+   "label": "Airtable ID"
+  },
+  {
+   "fieldname": "password",
+   "fieldtype": "Password",
+   "label": "Password"
+  },
+  {
+   "default": "Active",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Active\nInactive\nBlocked"
+  },
+  {
+   "fieldname": "working_schedule",
+   "fieldtype": "JSON",
+   "label": "Working Schedule"
+  },
+  {
+   "fieldname": "subreddit_group",
+   "fieldtype": "Select",
+   "label": "Subreddit Group",
+   "options": "East\nWest",
+   "reqd": 1
+  },
+  {
+   "fieldname": "last_activity",
+   "fieldtype": "Datetime",
+   "label": "Last Activity"
+  },
+  {
+   "default": "0",
+   "fieldname": "is_posting_paused",
+   "fieldtype": "Check",
+   "label": "Is Posting Paused"
+  },
+  {
+   "fieldname": "active_post",
+   "fieldtype": "Link",
+   "label": "Active Post",
+   "options": "Reddit Post"
+  },
+  {
+   "default": "0",
+   "fieldname": "posts_today_count",
+   "fieldtype": "Int",
+   "label": "Posts Today Count"
+  },
+  {
+   "fieldname": "last_sync",
+   "fieldtype": "Datetime",
+   "label": "Last Sync"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2025-12-01 10:27:06.215494",
+ "modified_by": "Administrator",
+ "module": "Reddit-Postmachine",
+ "name": "Reddit Account",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "read": 1,
+   "role": "System Manager",
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
