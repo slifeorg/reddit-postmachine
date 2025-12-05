@@ -1,104 +1,134 @@
 import frappe
 from frappe.model.document import Document
-from frappe.utils import strip_html
-import json
-from openai import OpenAI
+from frappe.utils import now_datetime, get_datetime
+import praw
+import time
 
 class RedditPost(Document):
-    pass
+    def after_insert(self):
+        self.update_template_stats()
+
+    def update_template_stats(self):
+        if self.template_used:
+            frappe.db.sql("""
+                UPDATE `tabSubreddit Template`
+                SET usage_count = usage_count + 1, last_used = NOW()
+                WHERE name = %s
+            """, (self.template_used,))
 
 @frappe.whitelist()
-def generate_content_from_template(template_name):
+def execute_smart_post_via_api(post_name):
     """
-    Генерує контент і повертає JSON для заповнення форми на клієнті.
+    Розумна публікація через API:
+    1. Перевіряє агента (Account).
+    2. Перевіряє історію постів агента (щоб не спамив).
+    3. Перевіряє активність у сабредіті (щоб не постити в переповнений саб).
+    4. Публікує пост.
     """
+    logs = []
     try:
-        # 1. Перевірка шаблону
-        if not template_name:
-            frappe.throw("Template is missing.")
-        
-        template = frappe.get_doc("Subreddit Template", template_name)
+        # --- 1. ПІДГОТОВКА ТА ПЕРЕВІРКА АГЕНТА ---
+        post = frappe.get_doc("Reddit Post", post_name)
+        if post.status == "Posted":
+            return {"status": "error", "message": "Already posted"}
 
-        # 2. API Key
-        key_doc_name = frappe.db.get_value("Keys", {}, "name")
-        if not key_doc_name:
-            frappe.throw("No 'Keys' document found.")
+        account = frappe.get_doc("Reddit Account", post.account)
         
-        api_key_doc = frappe.get_doc("Keys", key_doc_name)
-        api_key = api_key_doc.get_password("api_key")
-        
-        if not api_key:
-             frappe.throw("API Key is empty inside 'Keys'.")
+        # Розшифровуємо паролі
+        client_secret = account.get_password("client_secret")
+        reddit_password = account.get_password("password")
 
-        client = OpenAI(api_key=api_key)
+        if not (account.client_id and client_secret and account.username and reddit_password):
+            frappe.throw("Account credentials missing (Client ID/Secret/Password)")
 
-        # 3. Підготовка запиту
-        instructions = strip_html(template.prompt) if template.prompt else "Create content."
-        rules = strip_html(template.rules) if template.rules else ""
-        exclusions = template.body_exclusion_words if template.body_exclusion_words else ""
-        
-        json_schema = {
-            "name": "reddit_post_response",
-            "strict": True,
-            "schema": {
-                "type": "object",
-                "properties": {
-                    "title": { "type": "string" },
-                    "post_type": { "type": "string", "enum": ["Text", "Link"] },
-                    "url_to_share": { "type": "string" },
-                    "content": { "type": "string" },
-                    "hashtags": { "type": "string" }
-                },
-                "required": ["title", "post_type", "url_to_share", "content", "hashtags"],
-                "additionalProperties": False
-            }
-        }
-
-        # 4. Запит до OpenAI
-        completion = client.chat.completions.create(
-            model="gpt-4o-2024-08-06",
-            messages=[
-                {"role": "system", "content": f"Subreddit: r/{template.sub}. Group: {template.group}."},
-                {"role": "user", "content": f"Generate post.\nPrompt: {instructions}\nRules: {rules}\nAvoid: {exclusions}"}
-            ],
-            response_format={
-                "type": "json_schema",
-                "json_schema": json_schema
-            }
+        # Авторизація в PRAW
+        reddit = praw.Reddit(
+            client_id=account.client_id,
+            client_secret=client_secret,
+            username=account.username,
+            password=reddit_password,
+            user_agent=f"FrappeBot/1.0 (u/{account.username})"
         )
-
-        ai_response = json.loads(completion.choices[0].message.content)
-
-        # 5. Пошук акаунту
-        # Шукаємо активний, не на паузі
-        account = frappe.db.get_value("Reddit Account", {"status": "Active", "is_posting_paused": 0}, "name")
         
-        # Якщо немає, будь-який активний
-        if not account:
-            account = frappe.db.get_value("Reddit Account", {"status": "Active"}, "name")
+        # Перевірка: Хто я?
+        me = reddit.user.me()
+        logs.append(f"👤 Authenticated as: {me.name}")
+
+        # --- 2. ПЕРЕВІРКА ІСТОРІЇ АГЕНТА (Agent Checks) ---
+        # Отримуємо останні 5 постів агента
+        my_recent_posts = list(me.submissions.new(limit=5))
+        
+        if my_recent_posts:
+            last_post_time = my_recent_posts[0].created_utc
+            time_since_last = time.time() - last_post_time
             
-        # Якщо все ще немає, будь-який
-        if not account:
-            account = frappe.db.get_value("Reddit Account", {}, "name")
+            logs.append(f"⏱️ Time since last post by agent: {int(time_since_last/60)} minutes")
+
+            # Правило: Не постити частіше ніж раз на 15 хвилин (загалом)
+            if time_since_last < (15 * 60): 
+                return {
+                    "status": "failed", 
+                    "message": f"Agent cooldown active. Last post was {int(time_since_last/60)} min ago.",
+                    "logs": logs
+                }
+            
+            # Правило: Не постити в ЦЕЙ ЖЕ сабредіт, якщо останній пост був теж туди (менше 24 годин)
+            if my_recent_posts[0].subreddit.display_name.lower() == post.subreddit_name.lower():
+                if time_since_last < (24 * 60 * 60):
+                     return {
+                        "status": "failed", 
+                        "message": f"Agent already posted in r/{post.subreddit_name} today.",
+                        "logs": logs
+                    }
+
+        # --- 3. ПЕРЕВІРКА САБРЕДІТА (Subreddit Checks) ---
+        subreddit = reddit.subreddit(post.subreddit_name)
         
-        # 6. Повернення даних
+        # Отримуємо найсвіжіший пост у сабредіті (від будь-кого)
+        newest_in_sub = list(subreddit.new(limit=1))
+        
+        if newest_in_sub:
+            last_sub_post_time = newest_in_sub[0].created_utc
+            sub_idle_time = time.time() - last_sub_post_time
+            
+            logs.append(f"🌐 Last post in r/{post.subreddit_name} was {int(sub_idle_time/60)} minutes ago")
+            
+            # Правило: Якщо в сабредіті хтось запостив менше 5 хвилин тому - чекаємо
+            # (Щоб наш пост не загубився і не виглядав як спам-атака)
+            if sub_idle_time < (5 * 60):
+                return {
+                    "status": "failed", 
+                    "message": f"Subreddit is too busy. Someone posted {int(sub_idle_time)} sec ago.",
+                    "logs": logs
+                }
+
+        # --- 4. ДОДАВАННЯ ПОСТА (Execution) ---
+        logs.append("🚀 Checks passed. Publishing...")
+        
+        submission = None
+        if post.post_type == "Link":
+            submission = subreddit.submit(title=post.title, url=post.url_to_share)
+        else:
+            submission = subreddit.submit(title=post.title, selftext=post.body_text or "")
+
+        # Збереження результату
+        post.status = "Posted"
+        post.posted_at = now_datetime()
+        post.reddit_post_id = submission.id
+        post.reddit_post_url = submission.url
+        post.save(ignore_permissions=True)
+        frappe.db.commit()
+
+        logs.append(f"✅ Success! URL: {submission.url}")
+
         return {
             "status": "success",
-            "data": {
-                "title": ai_response.get("title"),
-                "post_type": ai_response.get("post_type"),
-                "url_to_share": ai_response.get("url_to_share"),
-                "body_text": ai_response.get("content"),
-                "hashtags": ai_response.get("hashtags"),
-                "subreddit_name": template.sub,
-                "subreddit_group": template.group,
-                "account": account or "" # Повертаємо пустий рядок, якщо не знайдено, щоб не було помилки JSON
-            }
+            "message": "Posted successfully",
+            "reddit_url": submission.url,
+            "logs": logs
         }
 
     except Exception as e:
-        frappe.log_error(title="Reddit AI Gen Error", message=str(e))
-        return {
-            "status": "error",
-            "error_message": str(e)
-        }
+        frappe.log_error(f"Smart Post Error: {str(e)}")
+        logs.append(f"❌ Error: {str(e)}")
+        return {"status": "error", "message": str(e), "logs": logs}

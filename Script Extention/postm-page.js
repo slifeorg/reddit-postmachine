@@ -257,7 +257,7 @@ class RedditHelper {
       if (shadowRoot) {
         const urlInput = shadowRoot.querySelector('#innerTextArea');
         if (urlInput) {
-          const url = 'https://youtube.com/shorts/0xmhrS_VNNY?si=awYc8i5YljycesXq';
+          const url = ('https://youtube.com/shorts/0xmhrS_VNNY?si=awYc8i5YljycesXq');
           urlInput.focus();
           await this.sleep(500);
           urlInput.value = url;
