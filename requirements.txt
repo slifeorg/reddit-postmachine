@@ -1,1 +1,4 @@
-praw
+echo "praw>=7.7.0" > /workspace/development/frappe-bench/apps/reddit_postmachine/requirements.txt
+echo "requests>=2.31.0" >> /workspace/development/frappe-bench/apps/reddit_postmachine/requirements.txt
+echo "python-dotenv>=1.0.0" >> /workspace/development/frappe-bench/apps/reddit_postmachine/requirements.txt
+echo "pytz>=2023.3" >> /workspace/development/frappe-bench/apps/reddit_postmachine/requirements.txt

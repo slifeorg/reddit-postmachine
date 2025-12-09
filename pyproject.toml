@@ -4,10 +4,16 @@ authors = [
     { name = "AndrewM", email = "newandrewmraiev@gmail.com"}
 ]
 description = "Reddit-Postmachine"
+version = "0.1.0"  # Додали статичну версію
 requires-python = ">=3.10"
 readme = "README.md"
-dynamic = ["version"]
+# dynamic = ["version"]  # Закоментували, бо тепер версія статична
+
 dependencies = [
+    "praw>=7.7.0",  # Додали з requirements.txt
+    "requests>=2.31.0",  # Додаткові корисні залежності
+    "python-dotenv>=1.0.0",
+    "pytz>=2023.3",
     # "frappe~=15.0.0" # Installed and managed by bench.
 ]
 
