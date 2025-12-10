@@ -1,0 +1,40 @@
+# Build artifacts
+reddit-post-machine-egg/
+*.zip
+
+# Dependencies
+node_modules/
+bun.lockb
+
+# Development
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Archive (keeping for reference)
+# archive/

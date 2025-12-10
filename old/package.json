@@ -1,0 +1,28 @@
+{
+  "name": "reddit-post-machine",
+  "version": "0.2.0",
+  "description": "Reddit Post Machine Extension with Clean Architecture",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run build --watch",
+    "build": "bun run build.js",
+    "clean": "rm -rf reddit-post-machine-egg",
+    "prebuild": "bun run clean",
+    "pack": "bun run build && cd reddit-post-machine-egg && zip -r ../reddit-post-machine-extension.zip .",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "bun-types": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "keywords": [
+    "chrome-extension",
+    "reddit",
+    "automation",
+    "social-media"
+  ],
+  "author": "Reddit Post Machine Team",
+  "license": "MIT"
+}

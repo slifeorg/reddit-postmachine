@@ -2,7 +2,7 @@
     "key": "LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUlJQklqQU5CZ2txaGtpRzl3MEJBUUVGQUFPQ0FROEFNSUlCQ2dLQ0FRRUFwWU5oN2lRcVpqeFgrMHFyMWhhagpJRlVsUmhuQ1hZRU1JVlNmbVowWHdPQUg0TjBaUHJpUFJMa2wrVGt6bFFxNHZzVGplOUxtRVNCc0Rza0h5cVRLCkdJandVMUJFem1nays4K2NNdEhsM1FKZU5PdjVRZVIrYW5XbExpdDJoT0hKdzlDcmJ1UC9la0F4N3l0K2JsTGwKaW15ejYwT1A1aW9zT2psMUpmMENZUXczU01zR1l1c3VLWWpnZ29uQ29MM0ZvaS9uMnhQWUtZWC9zQjg5UXl5bwowdXZlSXhFMlVwTlhicE9iNEhsbjJyVFFEUHpLeEo1TWQwSXNLSXVWRlhFdnVRcjcxaDhNK0xyeVlRRlh4TkswCnFCMFpNZXNJY05ZTWFrODdVV05idC95b3NwaHJ2WDU4akV0eUVsQm42RTJGQzI2ZUs3ekFTU3JBd0VQcFVEQkYKaFFJREFRQUIKLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0tCg==",
     "name": "Reddit Post Machine",
     "description": "Reddit Post Machine",
-    "version": "0.01.47",
+    "version": "0.6.1",
     "manifest_version": 3,
     "action": {
         "default_popup": "raven.html",
@@ -12,7 +12,7 @@
         }
     },
     "background": {
-        "service_worker": "reef.js",
+        "service_worker": "src/services/reef.js",
         "type": "module"
     },
     "content_scripts": [
@@ -21,7 +21,8 @@
                 "*://www.reddit.com/*"
             ],
             "js": [
-                "postm-page.js"
+                "src/sailor/reddit-post-man.js",
+                "src/content/reddit-helper.js"
             ],
             "run_at": "document_idle"
         },
@@ -34,7 +35,7 @@
                 "http://myreddit.localhost/*"
             ],
             "js": [
-                "frappe-bridge.js"
+                "src/content/frappe-bridge.js"
             ],
             "run_at": "document_idle"
         }

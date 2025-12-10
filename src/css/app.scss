@@ -1,0 +1,33 @@
+// app global css in SCSS form
+
+// Auto-Flow Decision Card Styles
+.status-success {
+  background: linear-gradient(135deg, #4caf50 0%, #66bb6a 100%) !important;
+  color: white;
+}
+
+.status-warning {
+  background: linear-gradient(135deg, #ff9800 0%, #ffa726 100%) !important;
+  color: white;
+}
+
+.status-error {
+  background: linear-gradient(135deg, #f44336 0%, #ef5350 100%) !important;
+  color: white;
+}
+
+// Text color utilities
+.text-positive {
+  color: #4caf50 !important;
+  font-weight: 600;
+}
+
+.text-warning {
+  color: #ff9800 !important;
+  font-weight: 600;
+}
+
+.text-negative {
+  color: #f44336 !important;
+  font-weight: 600;
+}
