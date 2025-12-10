@@ -3,6 +3,9 @@ from frappe.model.document import Document
 from frappe.utils import now_datetime, get_datetime
 import praw
 import time
+import json
+from frappe.utils import strip_html
+from openai import OpenAI
 
 class RedditPost(Document):
     def after_insert(self):
@@ -132,3 +135,109 @@ def execute_smart_post_via_api(post_name):
         frappe.log_error(f"Smart Post Error: {str(e)}")
         logs.append(f"❌ Error: {str(e)}")
         return {"status": "error", "message": str(e), "logs": logs}
+
+
+@frappe.whitelist()
+def generate_content_from_template(template_name, account_name=None):
+    """
+    Генерує контент для Reddit Post без створення документа.
+    Використовується з кнопки на формі Reddit Post.
+    """
+    logs = []
+    try:
+        # 1. Перевірка шаблону
+        if not frappe.db.exists("Subreddit Template", template_name):
+            frappe.throw(f"Template '{template_name}' not found")
+        template = frappe.get_doc("Subreddit Template", template_name)
+        logs.append(f"Template found: {template_name}")
+
+        # 2. Отримання API KEY
+        key_doc_name = frappe.db.get_value("Keys", {}, "name")
+        if not key_doc_name:
+            frappe.throw("No 'Keys' record found. Please create one.")
+        api_key = frappe.get_doc("Keys", key_doc_name).get_password("api_key")
+        if not api_key:
+            frappe.throw("The API Key field is empty in the 'Keys' document.")
+        client = OpenAI(api_key=api_key)
+        logs.append("API key retrieved")
+
+        # 3. Підготовка промпта
+        instructions = strip_html(template.prompt) if template.prompt else "Create viral content."
+        rules = strip_html(template.rules) if template.rules else "No specific rules."
+        exclusions = template.body_exclusion_words if template.body_exclusion_words else ""
+        logs.append("Prompt prepared")
+
+        # 4. JSON Schema
+        json_schema = {
+            "name": "reddit_post_response",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Engaging title"},
+                    "post_type": {"type": "string", "enum": ["Text", "Link"]},
+                    "url_to_share": {"type": "string", "description": "URL if Link type, else empty"},
+                    "content": {"type": "string", "description": "Body text"},
+                    "hashtags": {"type": "string", "description": "Relevant hashtags"},
+                },
+                "required": ["title", "post_type", "url_to_share", "content", "hashtags"],
+                "additionalProperties": False,
+            },
+        }
+
+        # 5. Виклик OpenAI
+        logs.append("Sending request to OpenAI")
+        completion = client.chat.completions.create(
+            model="gpt-4o-2024-08-06",
+            messages=[
+                {
+                    "role": "system",
+                    "content": f"You are a Reddit expert managing r/{template.sub}. Group: {template.group}.",
+                },
+                {
+                    "role": "user",
+                    "content": f"Generate a post.\nPrompt: {instructions}\nRules: {rules}\nAvoid: {exclusions}",
+                },
+            ],
+            response_format={"type": "json_schema", "json_schema": json_schema},
+        )
+        ai_response = json.loads(completion.choices[0].message.content)
+        logs.append("OpenAI response received")
+
+        # 6. Визначення акаунта (опційно)
+        account_doc = None
+        if account_name:
+            if not frappe.db.exists("Reddit Account", account_name):
+                frappe.throw(f"Account '{account_name}' not found")
+            account_doc = frappe.get_doc("Reddit Account", account_name)
+            if account_doc.status != "Active" or account_doc.is_posting_paused:
+                frappe.throw(f"Account '{account_name}' is inactive or paused.")
+            logs.append(f"Account fixed by input: {account_doc.name}")
+        else:
+            account_value = frappe.db.get_value("Reddit Account", {"status": "Active", "is_posting_paused": 0}, "name")
+            if not account_value:
+                account_value = frappe.db.get_value("Reddit Account", {}, "name")
+            if account_value:
+                account_doc = frappe.get_doc("Reddit Account", account_value)
+                logs.append(f"Account auto-selected: {account_doc.name}")
+
+        account_username = account_doc.username if account_doc else None
+
+        # 7. Повертаємо дані для заповнення форми
+        data = {
+            "title": ai_response.get("title"),
+            "post_type": ai_response.get("post_type"),
+            "url_to_share": ai_response.get("url_to_share"),
+            "body_text": ai_response.get("content"),
+            "hashtags": ai_response.get("hashtags"),
+            "subreddit_name": template.sub,
+            "subreddit_group": template.group,
+            "account": account_doc.name if account_doc else None,
+            "account_username": account_username or "Unknown",
+        }
+
+        return {"status": "success", "data": data, "logs": logs}
+
+    except Exception as e:
+        frappe.log_error("\n".join(logs + [f"generate_content_from_template error: {str(e)}"]))
+        return {"status": "error", "error_message": str(e), "logs": logs}
