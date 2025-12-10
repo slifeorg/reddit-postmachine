@@ -242,3 +242,14 @@ app_license = "mit"
 # 	"Logging DocType Name": 30  # days to retain logs
 # }
 
+# CORS Configuration
+# -----------------
+cors = {
+	"*": {
+		"allow_origins": ["*"],
+		"allow_methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+		"allow_headers": ["Content-Type", "Authorization", "X-Frappe-Site-Name"],
+		"max_age": 3600
+	}
+}
+

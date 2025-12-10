@@ -145,6 +145,12 @@ def generate_post_for_agent(agent_name):
        (last_used ASC, usage_count ASC).
     5. Генеруємо пост за цим шаблоном і прив'язуємо до обраного акаунта.
     """
+    # Встановлюємо CORS заголовки
+    frappe.local.response.headers["Access-Control-Allow-Origin"] = "*"
+    frappe.local.response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+    frappe.local.response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Frappe-Site-Name"
+    frappe.local.response.headers["Access-Control-Max-Age"] = "3600"
+    
     logs = []
     if not agent_name:
         frappe.throw("Agent name is required.")
