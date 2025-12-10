@@ -10,6 +10,7 @@ readme = "README.md"
 # dynamic = ["version"]  # Закоментували, бо тепер версія статична
 
 dependencies = [
+    "openai>=1.51.0",  # Для генерації контенту через OpenAI
     "praw>=7.7.0",  # Додали з requirements.txt
     "requests>=2.31.0",  # Додаткові корисні залежності
     "python-dotenv>=1.0.0",
