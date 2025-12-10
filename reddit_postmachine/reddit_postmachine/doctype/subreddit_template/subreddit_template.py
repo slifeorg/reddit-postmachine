@@ -139,9 +139,11 @@ def generate_post_for_agent(agent_name):
     API-метод: повертає новий Reddit Post для вказаного агента.
     Логіка:
     1. Знаходимо акаунт за ім'ям агента (assistant_name або username).
-    2. Беремо його групу (регіон) та підбираємо активний шаблон із цієї групи,
-       який використовувався найдавніше (last_used ASC, usage_count ASC).
-    3. Генеруємо пост за цим шаблоном і прив'язуємо до обраного акаунта.
+    2. Беремо його групу (регіон).
+    3. Дивимося, коли востаннє у цьому регіоні був запощений пост (status='Posted').
+    4. Підбираємо активний шаблон цієї групи, який використовувався найдавніше
+       (last_used ASC, usage_count ASC).
+    5. Генеруємо пост за цим шаблоном і прив'язуємо до обраного акаунта.
     """
     logs = []
     if not agent_name:
@@ -165,7 +167,27 @@ def generate_post_for_agent(agent_name):
         frappe.throw(f"Account '{account_name}' has no subreddit group assigned.")
     logs.append(f"Subreddit group: {account_doc.subreddit_group}")
 
-    # 2. Вибираємо шаблон по групі з найстарішим використанням
+    last_post_row = frappe.db.sql(
+        """
+        SELECT name, posted_at
+        FROM `tabReddit Post`
+        WHERE subreddit_group = %s AND status = 'Posted' AND posted_at IS NOT NULL
+        ORDER BY posted_at DESC
+        LIMIT 1
+        """,
+        (account_doc.subreddit_group,),
+        as_dict=True,
+    )
+
+    last_posted_at = last_post_row[0]["posted_at"] if last_post_row else None
+    last_post_name = last_post_row[0]["name"] if last_post_row else None
+    logs.append(
+        f"Last posted in group: {last_posted_at} (post: {last_post_name})"
+        if last_posted_at
+        else "No posted items found in this group yet"
+    )
+
+    # 3. Вибираємо шаблон по групі з найстарішим використанням
     logs.append("Selecting template by group (oldest last_used, then usage_count)")
     template_row = frappe.db.sql(
         """
@@ -187,7 +209,6 @@ def generate_post_for_agent(agent_name):
     template_name = template_row[0]["name"]
     logs.append(f"Template selected: {template_name}")
 
-    # 3. Генеруємо пост, фіксуючи акаунт агента
     try:
         result = generate_post_from_template(template_name, account_name=account_doc.name)
     except Exception as e:
@@ -201,6 +222,10 @@ def generate_post_for_agent(agent_name):
             "agent_name": agent_name,
             "subreddit_group": account_doc.subreddit_group,
             "template_used": template_name,
+            "last_region_post": {
+                "name": last_post_name,
+                "posted_at": last_posted_at,
+            },
             "logs": logs,
         }
     )
