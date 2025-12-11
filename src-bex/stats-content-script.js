@@ -31,6 +31,20 @@ async function getStoredUsername() {
 
 async function storeRedditProfileData(username, postsData) {
   try {
+    console.log(` Storing profile data for ${username} with ${postsData.length} posts`)
+    
+    // Log sample of posts data being stored
+    if (postsData.length > 0) {
+      console.log(' Sample post data being stored:', {
+        title: postsData[0].title,
+        author: postsData[0].author,
+        subreddit: postsData[0].subreddit,
+        score: postsData[0].score,
+        commentCount: postsData[0].commentCount,
+        itemState: postsData[0].itemState
+      })
+    }
+    
     // Store in local storage for detailed data
     await chrome.storage.local.set({
       redditProfileData: {
@@ -41,36 +55,107 @@ async function storeRedditProfileData(username, postsData) {
     })
     
     // Store posts data in the format expected by popup for Status report
+    const storageData = {
+      username: username,
+      posts: postsData,
+      timestamp: Date.now(),
+      totalPosts: postsData.length
+    }
+    
     await chrome.storage.local.set({
-      latestPostsData: {
-        username: username,
-        posts: postsData,
-        timestamp: Date.now(),
-        source: 'stats_collection'
-      }
+      latestPostsData: storageData
     })
     
-    // Store summary in sync storage for popup
-    await chrome.storage.sync.set({
-      redditUser: {
-        seren_name: username,
-        lastCheck: Date.now(),
-        postsCount: postsData.length
-      }
-    })
-    
-    console.log(`Stored profile data for ${username}: ${postsData.length} posts`)
-    console.log(`Posts data also saved to latestPostsData for Status report`)
+    console.log(` Stored profile data for ${username}: ${postsData.length} posts`)
+    console.log(` Posts data also saved to latestPostsData for Status report`)
+    console.log(' latestPostsData structure:', storageData)
     
     // Notify background script
     chrome.runtime.sendMessage({
-      type: 'PROFILE_DATA_STORED',
-      username: username,
-      postsCount: postsData.length
-    }).catch(() => {})
+      type: 'POSTS_DATA_UPDATED',
+      data: {
+        username: username,
+        postsCount: postsData.length,
+        lastPost: postsData.length > 0 ? postsData[0] : null
+      }
+    })
     
   } catch (error) {
-    console.error('Failed to store profile data:', error)
+    console.error(' Failed to store profile data:', error)
+  }
+}
+
+async function storeRedditProfileData(username, postsData) {
+  try {
+    console.log(` Storing profile data for ${username} with ${postsData.length} posts`)
+    
+    // Log sample of posts data being stored
+    if (postsData.length > 0) {
+      console.log(' Sample post data being stored:', {
+        title: postsData[0].title,
+        author: postsData[0].author,
+        subreddit: postsData[0].subreddit,
+        score: postsData[0].score,
+        commentCount: postsData[0].commentCount,
+        itemState: postsData[0].itemState
+      })
+    }
+    
+    // Store posts data in the format expected by popup for Status report
+    const storageData = {
+      username: username,
+      posts: postsData,
+      timestamp: Date.now(),
+      totalPosts: postsData.length
+    }
+    
+    await chrome.storage.local.set({
+      latestPostsData: storageData
+    })
+    
+    // Create derived userStatus from latestPostsData for popup compatibility
+    const derivedUserStatus = {
+      userName: username,
+      currentUser: username,
+      storedUser: username,
+      isMatch: true,
+      lastCheck: Date.now(),
+      totalPosts: postsData.length,
+      postsCount: postsData.length,
+      lastPostText: postsData.length > 0 ? postsData[0].title || 'Recent post' : 'No posts',
+      lastPostDate: postsData.length > 0 ? postsData[0].timestamp || Date.now() : null,
+      currentUrl: window.location.href,
+      timestamp: Date.now(),
+      collectingPostsData: false,
+      dataFresh: true,
+      // Enhanced metadata
+      lastPostScore: postsData.length > 0 ? postsData[0].score || 0 : 0,
+      lastPostComments: postsData.length > 0 ? postsData[0].commentCount || 0 : 0,
+      lastPostSubreddit: postsData.length > 0 ? postsData[0].subreddit || 'unknown' : 'unknown',
+      lastPostAuthor: postsData.length > 0 ? postsData[0].author || 'unknown' : 'unknown'
+    }
+    
+    // Update both userStatus locations to maintain compatibility
+    await chrome.storage.local.set({ userStatus: derivedUserStatus })
+    await chrome.storage.sync.set({ userStatus: derivedUserStatus })
+    
+    console.log(` Stored profile data for ${username}: ${postsData.length} posts`)
+    console.log(` Updated derived userStatus with enhanced metadata`)
+    console.log(' latestPostsData structure:', storageData)
+    console.log(' derived userStatus structure:', derivedUserStatus)
+    
+    // Notify background script
+    chrome.runtime.sendMessage({
+      type: 'POSTS_DATA_UPDATED',
+      data: {
+        username: username,
+        postsCount: postsData.length,
+        lastPost: postsData.length > 0 ? postsData[0] : null
+      }
+    })
+    
+  } catch (error) {
+    console.error(' Failed to store profile data:', error)
   }
 }
 
@@ -396,7 +481,7 @@ function findShredditPostsGreedy() {
 
 // Focused function to extract data from found shreddit-post elements
 function extractPostDataFromShredditPosts(shredditPosts) {
-  console.log(`🔍 Extracting data from ${shredditPosts.length} shreddit-post elements...`)
+  console.log(`🔍 Extracting enhanced data from ${shredditPosts.length} shreddit-post elements...`)
   
   const posts = []
   
@@ -412,6 +497,28 @@ function extractPostDataFromShredditPosts(shredditPosts) {
         searchRoot = post.shadowRoot
       } else {
         console.log(`📄 Post ${post.id} uses normal DOM`)
+      }
+      
+      // Extract data attributes from shreddit-post element (primary source)
+      const postAttributes = {
+        postTitle: post.getAttribute('post-title'),
+        author: post.getAttribute('author'),
+        subredditPrefixedName: post.getAttribute('subreddit-prefixed-name'),
+        score: post.getAttribute('score'),
+        commentCount: post.getAttribute('comment-count'),
+        createdTimestamp: post.getAttribute('created-timestamp'),
+        postType: post.getAttribute('post-type'),
+        contentHref: post.getAttribute('content-href'),
+        permalink: post.getAttribute('permalink'),
+        postId: post.getAttribute('id'),
+        domain: post.getAttribute('domain'),
+        itemState: post.getAttribute('item-state'),
+        viewContext: post.getAttribute('view-context'),
+        voteType: post.getAttribute('vote-type'),
+        awardCount: post.getAttribute('award-count'),
+        userId: post.getAttribute('user-id'),
+        authorId: post.getAttribute('author-id'),
+        subredditId: post.getAttribute('subreddit-id')
       }
       
       // Method 1: Look for title in shadow root first - prioritize specific title selectors
@@ -450,7 +557,7 @@ function extractPostDataFromShredditPosts(shredditPosts) {
         console.log(`🔍 Title element ID:`, titleElement.id)
       }
       
-      // Method 4: Look for any link with content
+      // Method 5: Look for any link with content
       if (!titleElement) {
         const allLinks = post.querySelectorAll('a')
         for (const link of allLinks) {
@@ -462,82 +569,291 @@ function extractPostDataFromShredditPosts(shredditPosts) {
         }
       }
       
-      // Extract score with multiple methods
-      let scoreElement = searchRoot.querySelector('faceplate-number') ||
-                        searchRoot.querySelector('[data-testid="post-vote-score"]') ||
-                        searchRoot.querySelector('.score') ||
-                        searchRoot.querySelector('[slot="vote-score"]') ||
-                        post.querySelector('faceplate-number') ||
-                        post.querySelector('[data-testid="post-vote-score"]') ||
-                        post.querySelector('.score')
+      // Extract score with multiple methods, prioritize HTML attributes
+      let score = postAttributes.score || '0'
+      if (!postAttributes.score) {
+        const scoreElement = searchRoot.querySelector('faceplate-number') ||
+                          searchRoot.querySelector('[data-testid="post-vote-score"]') ||
+                          searchRoot.querySelector('.score') ||
+                          searchRoot.querySelector('[slot="vote-score"]') ||
+                          post.querySelector('faceplate-number') ||
+                          post.querySelector('[data-testid="post-vote-score"]') ||
+                          post.querySelector('.score')
+        score = scoreElement?.textContent?.trim() || '0'
+      }
       
-      // Extract comments with multiple methods
-      let commentsElement = searchRoot.querySelector('a[href*="/comments/"] span') ||
-                           searchRoot.querySelector('[data-testid="comment-count"]') ||
-                           searchRoot.querySelector('[slot="comment-count"]') ||
-                           post.querySelector('a[href*="/comments/"] span') ||
-                           post.querySelector('[data-testid="comment-count"]')
+      // Extract comments with multiple methods, prioritize HTML attributes
+      let comments = postAttributes.commentCount || '0'
+      if (!postAttributes.commentCount) {
+        const commentsElement = searchRoot.querySelector('a[href*="/comments/"] span') ||
+                             searchRoot.querySelector('[data-testid="comment-count"]') ||
+                             searchRoot.querySelector('[slot="comment-count"]') ||
+                             post.querySelector('a[href*="/comments/"] span') ||
+                             post.querySelector('[data-testid="comment-count"]')
+        comments = commentsElement?.textContent?.trim() || '0'
+      }
       
-      // Extract URL
-      let linkElement = searchRoot.querySelector('a[href*="/comments/"]') ||
-                       searchRoot.querySelector('a[slot="full-post-link"]') ||
-                       post.querySelector('a[href*="/comments/"]') ||
-                       post.querySelector('a[slot="full-post-link"]')
+      // Extract URL, prioritize HTML attributes
+      const postUrl = postAttributes.permalink || 
+                     (searchRoot.querySelector('a[href*="/comments/"]') ||
+                      searchRoot.querySelector('a[slot="full-post-link"]') ||
+                      post.querySelector('a[href*="/comments/"]') ||
+                      post.querySelector('a[slot="full-post-link"]'))?.href || ''
       
-      const title = titleElement?.textContent?.trim() || 'No title'
-      const score = scoreElement?.textContent?.trim() || '0'
-      const comments = commentsElement?.textContent?.trim() || '0'
-      const url = linkElement?.href || window.location.href
-      const timestamp = Date.now()
+      const title = postAttributes.postTitle || titleElement?.textContent?.trim() || 'No title'
+      const timestamp = postAttributes.createdTimestamp || 
+                       (searchRoot.querySelector('time')?.getAttribute('datetime') ||
+                        post.querySelector('time')?.getAttribute('datetime') || new Date().toISOString())
       
-      // Extract post URL/ID for deletion (same as dom.js)
-      const postUrl = linkElement?.href || ''
-      const postId = post.id?.replace('t3_', '') || ''
+      // Enhanced post data object with all metadata
+      const postData = {
+        // Core identifiers
+        id: post.id || postAttributes.postId || '',
+        title: title,
+        url: postUrl,
+        timestamp: timestamp,
+        
+        // Author and subreddit information
+        author: postAttributes.author || '',
+        subreddit: postAttributes.subredditPrefixedName || '',
+        authorId: postAttributes.authorId || '',
+        subredditId: postAttributes.subredditId || '',
+        
+        // Engagement metrics
+        score: parseInt(score) || 0,
+        commentCount: parseInt(comments) || 0,
+        awardCount: parseInt(postAttributes.awardCount) || 0,
+        
+        // Post content information
+        postType: postAttributes.postType || '',
+        domain: postAttributes.domain || '',
+        contentHref: postAttributes.contentHref || '',
+        
+        // Status and moderation
+        itemState: postAttributes.itemState || '',
+        viewContext: postAttributes.viewContext || '',
+        voteType: postAttributes.voteType || '',
+        
+        // Additional metadata
+        userId: postAttributes.userId || '',
+        permalink: postAttributes.permalink || ''
+      }
       
-      // Check post status flags (same as dom.js)
-      const isRemoved = checkPostStatus(post, 'removed')
-      const isBlocked = checkPostStatus(post, 'blocked')
-      const isDeleted = checkPostStatus(post, 'deleted')
-      
-      // Check for moderator removal indicators
-      const moderatorFlags = post.querySelectorAll('[class*="moderator"], [class*="removed"], [class*="deleted"]')
-      const hasModeratorAction = moderatorFlags.length > 0
-      
-      // Extract vote score and check for downvotes
-      let scoreValue = parseInt(score) || 0
-      const hasDownvotes = scoreValue <= 0 // Score of 0 or less indicates downvotes
-      
-      // Check if current user downvoted this post
-      const downvoteButton = post.querySelector('button[downvote][aria-pressed="true"]')
-      const userDownvoted = !!downvoteButton
-      
-      console.log(`📝 Extracted: "${title.substring(0, 50)}..." | Status: ${isRemoved ? 'Removed' : isBlocked ? 'Blocked' : 'Active'} | URL: ${url}`)
-      
-      posts.push({
-        title,
-        score,
-        comments,
-        url,
-        timestamp,
-        postUrl: postUrl,
-        postId: postId,
-        isRemoved: isRemoved || hasModeratorAction,
-        isBlocked: isBlocked,
-        deleted: isDeleted,
-        hasModeratorAction: hasModeratorAction,
-        hasDownvotes: hasDownvotes,
-        userDownvoted: userDownvoted,
-        scoreValue: scoreValue
+      console.log(`📊 Enhanced post data extracted:`, {
+        id: postData.id,
+        title: postData.title,
+        author: postData.author,
+        subreddit: postData.subreddit,
+        score: postData.score,
+        commentCount: postData.commentCount,
+        postType: postData.postType,
+        itemState: postData.itemState
       })
       
+      posts.push(postData)
+      
     } catch (error) {
-      console.warn(`❌ Error processing post ${post.id}:`, error)
+      console.error(`❌ Error processing post ${index + 1}:`, error)
     }
   })
   
-  console.log(`\n✅ Successfully extracted data from ${posts.length} posts`)
+  console.log(`\n✅ Successfully extracted enhanced data from ${posts.length} posts`)
   return posts
 }
+
+// Helper method to check post status (same as dom.js)
+function checkPostStatus(postElement, statusType) {
+  const statusClasses = [
+    `[class*="${statusType}"]`,
+    `[class*="moderator"]`,
+    `[data-testid*="${statusType}"]`,
+    '.removed',
+    '.deleted',
+    '.blocked'
+  ]
+  
+  // Check post element and its children for status indicators
+  for (const selector of statusClasses) {
+    const elements = postElement.querySelectorAll(selector)
+    if (elements.length > 0) {
+      // Verify it's not just a class name coincidence
+      const text = elements[0].textContent?.toLowerCase() || ''
+      if (text.includes(statusType) || text.includes('moderator') || text.includes('removed') || text.includes('deleted')) {
+        return true
+      }
+    }
+  }
+  
+  // Check for specific status text patterns
+  const statusTexts = [
+    'removed by moderator',
+    'deleted by moderator', 
+    'this post has been removed',
+    'post blocked',
+    'moderator action'
+  ]
+  
+  const postText = postElement.textContent?.toLowerCase() || ''
+  return statusTexts.some(statusText => postText.includes(statusText))
+}
+
+// Handle check user status request
+async function handleCheckUserStatus(userName) {
+  console.log('Check user status request for:', userName)
+  
+  try {
+    // Navigate to user profile and posts
+    await navigateToUserProfile(userName)
+    await navigateToPostsTab()
+    
+    // Extract enhanced post data using the new function
+    const shredditApp = document.querySelector('shreddit-app')
+    if (!shredditApp) {
+      throw new Error('Reddit app container not found')
+    }
+    
+    // Find all shreddit-post elements with IDs
+    const shredditPosts = Array.from(shredditApp.querySelectorAll('shreddit-post[id^="t3_"]'))
+    console.log(`🎯 Found ${shredditPosts.length} shreddit-post elements with IDs`)
+    
+    if (shredditPosts.length === 0) {
+      return {
+        postsInfo: {
+          posts: [],
+          total: 0,
+          lastPost: null
+        },
+        lastPost: null,
+        totalPosts: 0,
+        userName: userName
+      }
+    }
+    
+    // Extract enhanced post data
+    const postsData = extractPostDataFromShredditPosts(shredditPosts)
+    
+    // Create status report with expected structure for background.js
+    const status = {
+      postsInfo: {
+        posts: postsData,
+        total: postsData.length,
+        lastPost: postsData.length > 0 ? postsData[0] : null
+      },
+      lastPost: postsData.length > 0 ? postsData[0] : null,
+      totalPosts: postsData.length,
+      userName: userName,
+      timestamp: new Date().toISOString()
+    }
+    
+    console.log('Enhanced user status check result:', status)
+    return status
+    
+  } catch (error) {
+    console.error('Error checking user status:', error)
+    return {
+      postsInfo: {
+        posts: [],
+        total: 0,
+        lastPost: null
+      },
+      lastPost: null,
+      totalPosts: 0,
+      userName: userName,
+      error: error.message
+    }
+  }
+}
+
+// Navigate to user profile (helper function)
+async function navigateToUserProfile(userName) {
+  console.log('Navigating to user profile...')
+  
+  // Extract username without u/ prefix if present
+  const cleanUsername = userName.replace('u/', '')
+  const targetUrl = `https://www.reddit.com/user/${cleanUsername}`
+  
+  // Check if we are already on the correct page
+  if (window.location.href.split('?')[0] === targetUrl || 
+      window.location.href.split('?')[0] === targetUrl + '/') {
+    console.log('Already on user profile page')
+    return true
+  }
+  
+  window.location.href = targetUrl
+  await new Promise(resolve => setTimeout(resolve, 3000))
+  return true
+}
+
+// Navigate to posts tab (helper function)
+async function navigateToPostsTab() {
+  console.log('Navigating to Posts tab...')
+  
+  if (window.location.pathname.endsWith('/submitted') || 
+      window.location.pathname.endsWith('/submitted/')) {
+    console.log('Already on submitted/posts page')
+    return true
+  }
+
+  const postsTabSelectors = [
+    'a[href*="/submitted/"]',
+    '#profile-tab-posts_tab',
+    'faceplate-tracker[noun="posts_tab"] a',
+    '[data-testid*="posts"]'
+  ]
+  
+  for (const selector of postsTabSelectors) {
+    const postsTab = document.querySelector(selector)
+    if (postsTab && postsTab.textContent?.toLowerCase().includes('posts')) {
+      console.log('Found Posts tab, clicking...')
+      postsTab.click()
+      await new Promise(resolve => setTimeout(resolve, 2000))
+      return true
+    }
+  }
+  
+  return false
+}
+
+// Manual trigger function for debugging
+window.triggerProfileDataCollection = async function() {
+  console.log('🔧 MANUAL TRIGGER: Starting profile data collection...')
+  
+  try {
+    const username = extractUsernameFromPage()
+    if (!username) {
+      console.log('❌ No username found on current page')
+      return { success: false, error: 'No username found' }
+    }
+    
+    console.log(`🔧 MANUAL TRIGGER: Found username: ${username}`)
+    
+    // Capture posts data directly
+    const postsData = await capturePostsData()
+    console.log(`🔧 MANUAL TRIGGER: Captured ${postsData.length} posts`)
+    
+    if (postsData.length > 0) {
+      // Store the data
+      await storeRedditProfileData(username, postsData)
+      console.log('🔧 MANUAL TRIGGER: Data stored successfully')
+      
+      return { 
+        success: true, 
+        username: username,
+        postsCount: postsData.length,
+        samplePost: postsData[0]
+      }
+    } else {
+      console.log('❌ MANUAL TRIGGER: No posts found')
+      return { success: false, error: 'No posts found' }
+    }
+    
+  } catch (error) {
+    console.error('❌ MANUAL TRIGGER: Error:', error)
+    return { success: false, error: error.message }
+  }
+}
+
+console.log('🔧 Manual trigger available: window.triggerProfileDataCollection()')
 
 // Helper method to check post status (same as dom.js)
 function checkPostStatus(postElement, statusType) {
@@ -597,10 +913,26 @@ async function capturePostsData() {
       console.log(`🎯 Found ${shredditPosts.length} shreddit-post elements with IDs`)
       
       if (shredditPosts.length > 0) {
+        console.log('🔍 Using enhanced post data extraction...')
         const extractedPosts = extractPostDataFromShredditPosts(shredditPosts)
+        console.log(`✅ Enhanced extraction captured ${extractedPosts.length} posts with metadata`)
+        
+        // Log first post to verify enhanced data
+        if (extractedPosts.length > 0) {
+          console.log('📊 Sample enhanced post data:', {
+            id: extractedPosts[0].id,
+            title: extractedPosts[0].title,
+            author: extractedPosts[0].author,
+            subreddit: extractedPosts[0].subreddit,
+            score: extractedPosts[0].score,
+            commentCount: extractedPosts[0].commentCount,
+            itemState: extractedPosts[0].itemState
+          })
+        }
+        
         posts.push(...extractedPosts)
         
-        console.log(`✅ Successfully captured ${posts.length} posts`)
+        console.log(`✅ Successfully captured ${posts.length} posts with enhanced metadata`)
         return posts
       }
     }
@@ -687,7 +1019,7 @@ async function continueProfileDataCollection() {
       }
       
       chrome.storage.local.set({
-        userStatusResult: freshStatus
+        userStatus: freshStatus
       }).then(() => {
         console.log('User status updated with fresh posts data')
         
@@ -726,7 +1058,7 @@ async function continueProfileDataCollection() {
       }
       
       chrome.storage.local.set({
-        userStatusResult: noDataStatus
+        userStatus: noDataStatus
       }).catch(() => {})
     }
     
@@ -741,7 +1073,7 @@ async function continueProfileDataCollection() {
     
     // Update status with error
     chrome.storage.local.set({
-      userStatusResult: {
+      userStatus: {
         error: error.message,
         timestamp: Date.now(),
         collectingPostsData: false,
@@ -1030,7 +1362,7 @@ async function handleCheckUserStatus(userName) {
       }
       
       chrome.storage.local.set({
-        userStatusResult: navigationStatus
+        userStatus: navigationStatus
       }).catch(() => {})
       
       const navigationSuccess = await handleUserNotFoundNavigation()
@@ -1043,7 +1375,7 @@ async function handleCheckUserStatus(userName) {
         }
         
         chrome.storage.local.set({
-          userStatusResult: profileStatus
+          userStatus: profileStatus
         }).catch(() => {})
         
         // After profile navigation, try to navigate to posts
@@ -1061,7 +1393,7 @@ async function handleCheckUserStatus(userName) {
           }
           
           chrome.storage.local.set({
-            userStatusResult: postsFailedStatus
+            userStatus: postsFailedStatus
           }).catch(() => {})
           return
         }
@@ -1074,7 +1406,7 @@ async function handleCheckUserStatus(userName) {
         }
         
         chrome.storage.local.set({
-          userStatusResult: profileFailedStatus
+          userStatus: profileFailedStatus
         }).catch(() => {})
         return
       }
@@ -1102,7 +1434,7 @@ async function handleCheckUserStatus(userName) {
     
     // Store initial status in chrome.storage
     chrome.storage.local.set({
-      userStatusResult: status
+      userStatus: status
     }).then(() => {
       console.log('User status stored in local storage')
     }).catch(error => {
@@ -1122,7 +1454,7 @@ async function handleCheckUserStatus(userName) {
       }
       
       chrome.storage.local.set({
-        userStatusResult: collectingStatus
+        userStatus: collectingStatus
       }).catch(() => {})
       
       // Store username for the profile detection flow
@@ -1146,7 +1478,7 @@ async function handleCheckUserStatus(userName) {
     
     // Store error status in storage
     chrome.storage.local.set({
-      userStatusResult: {
+      userStatus: {
         error: error.message,
         timestamp: Date.now(),
         collectingPostsData: false,

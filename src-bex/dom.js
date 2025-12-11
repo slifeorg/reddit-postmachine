@@ -781,25 +781,54 @@ Object.assign(RedditDOMHelper, {
       
       // Enhanced post data extraction with metadata
       const postsWithMetadata = posts.map(post => {
+        // Extract data attributes from shreddit-post element
+        const postAttributes = {
+          postTitle: post.getAttribute('post-title'),
+          author: post.getAttribute('author'),
+          subredditPrefixedName: post.getAttribute('subreddit-prefixed-name'),
+          score: post.getAttribute('score'),
+          commentCount: post.getAttribute('comment-count'),
+          createdTimestamp: post.getAttribute('created-timestamp'),
+          postType: post.getAttribute('post-type'),
+          contentHref: post.getAttribute('content-href'),
+          permalink: post.getAttribute('permalink'),
+          postId: post.getAttribute('id'),
+          domain: post.getAttribute('domain'),
+          itemState: post.getAttribute('item-state'),
+          viewContext: post.getAttribute('view-context'),
+          voteType: post.getAttribute('vote-type'),
+          awardCount: post.getAttribute('award-count'),
+          userId: post.getAttribute('user-id'),
+          authorId: post.getAttribute('author-id'),
+          subredditId: post.getAttribute('subreddit-id')
+        }
+
         // Extract timestamp with multiple fallback methods
         const timestampElement = post.querySelector('time, [data-testid="post_timestamp"], faceplate-time')
-        const timestamp = timestampElement?.getAttribute('datetime') ||
+        const timestamp = postAttributes.createdTimestamp ||
+                          timestampElement?.getAttribute('datetime') ||
                           timestampElement?.getAttribute('created-timestamp') ||
                           post.getAttribute('created-timestamp') ||
                           timestampElement?.textContent
 
         // Extract post URL/ID for deletion
         const postLink = post.querySelector('a[data-testid="post-content"], a[href*="/comments/"]')
-        const postUrl = postLink?.href || post.getAttribute('permalink')
-        const postId = this.extractPostId(postUrl)
+        const postUrl = postAttributes.permalink || postLink?.href || post.getAttribute('permalink')
+        const postId = this.extractPostId(postAttributes.postId || postUrl)
 
         // Extract post title for identification
         const titleElement = post.querySelector('h3, [data-testid="post-content"], .title, [slot="title"], div[data-click-id="text"], [data-adclicklocation="title"], a[data-click-id="text"], .PostTitle, h1, h2')
-        const title = titleElement?.textContent?.trim() || 
+        const title = postAttributes.postTitle || 
+                     titleElement?.textContent?.trim() || 
                      post.getAttribute('post-title') ||
                      post.querySelector('[data-post-title]')?.textContent?.trim() ||
                      post.querySelector('a[href*="/comments/"]')?.textContent?.trim() ||
                      'Untitled Post' // Fallback to prevent filtering
+
+        // Extract engagement metrics
+        const score = postAttributes.score || '0'
+        const commentCount = postAttributes.commentCount || '0'
+        const awardCount = postAttributes.awardCount || '0'
 
         // Check post status flags
         const isRemoved = this.checkPostStatus(post, 'removed')
@@ -811,14 +840,35 @@ Object.assign(RedditDOMHelper, {
         const hasModeratorAction = moderatorFlags.length > 0
 
         return {
-          timestamp: timestamp || new Date().toISOString(), // Fallback to current time
+          // Core metadata
+          timestamp: timestamp || new Date().toISOString(),
           postUrl: postUrl || '',
           postId: postId || '',
           title: title,
+          
+          // Enhanced Reddit-specific metadata
+          author: postAttributes.author || '',
+          subreddit: postAttributes.subredditPrefixedName || '',
+          score: parseInt(score) || 0,
+          commentCount: parseInt(commentCount) || 0,
+          awardCount: parseInt(awardCount) || 0,
+          postType: postAttributes.postType || '',
+          domain: postAttributes.domain || '',
+          contentHref: postAttributes.contentHref || '',
+          
+          // Status and moderation
           isRemoved: isRemoved || hasModeratorAction,
           isBlocked: isBlocked,
           deleted: isDeleted,
-          hasModeratorAction: hasModeratorAction
+          hasModeratorAction: hasModeratorAction,
+          itemState: postAttributes.itemState || '',
+          
+          // Additional metadata
+          viewContext: postAttributes.viewContext || '',
+          voteType: postAttributes.voteType || '',
+          userId: postAttributes.userId || '',
+          authorId: postAttributes.authorId || '',
+          subredditId: postAttributes.subredditId || ''
         }
       }).filter(post => {
         // Debug: Log what we're extracting for each post
@@ -826,7 +876,10 @@ Object.assign(RedditDOMHelper, {
           timestamp: post.timestamp,
           postId: post.postId, 
           postUrl: post.postUrl,
-          title: post.title
+          title: post.title,
+          author: post.author,
+          subreddit: post.subreddit,
+          score: post.score
         })
         
         // Filter out invalid posts - must have valid postId, postUrl, and title

@@ -827,6 +827,16 @@ async function waitForElement(selector, timeout = 10000) {
   return null;
 }
 
+async function waitForElements(selector, timeout = 5000) {
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    const elements = document.querySelectorAll(selector);
+    if (elements.length > 0) return Array.from(elements);
+    await sleep(100);
+  }
+  return [];
+}
+
 async function openUserDropdown() {
   console.log('Opening user dropdown...')
   
@@ -920,7 +930,8 @@ async function getAuthenticatedUsername() {
   
   // If not found, try opening dropdown and getting username
   if (await openUserDropdown()) {
-    await sleep(1500)
+    // Wait longer for dropdown to fully load and use waitForElement
+    await sleep(2000)
     
     const dropdownSelectors = [
       'span.text-12.text-secondary-weak',
@@ -929,13 +940,14 @@ async function getAuthenticatedUsername() {
     ]
     
     for (const selector of dropdownSelectors) {
-      const elements = qsAll(selector)
+      // Wait for elements to appear
+      const elements = await waitForElements(selector, 3000)
       for (const element of elements) {
         const text = element.textContent?.trim()
         if (text && text.startsWith('u/')) {
-          // Close dropdown
-          element.click()
-          await sleep(1000)
+          // Close dropdown by clicking outside
+          document.body.click()
+          await sleep(500)
           
           // Update cache
           cachedUsername = text
@@ -1049,88 +1061,66 @@ async function extractUsernameFromPage() {
     }
   }
   
-  // Method 3: Try to open user dropdown if previous methods failed
-  console.log('Trying dropdown method...')
-  if (!await openUserDropdown()) {
-    console.log('Could not open user dropdown')
-    return await tryAlternativeUsernameExtraction()
-  }
-  
-  await sleep(1500)
-  
-  // Look for username in the opened dropdown with more selectors
-  const dropdownSelectors = [
-    'span.text-12.text-secondary-weak',
-    '[id*="user-drawer"] span',
-    '.text-12',
-    'span[data-testid*="user"]',
-    'div[data-testid*="user"] span',
-    'a[href*="/u/"]'
-  ]
-  
-  for (const selector of dropdownSelectors) {
-    const elements = qsAll(selector)
-    for (const element of elements) {
-      const text = element.textContent?.trim() || element.href
-      if (text && text.startsWith('u/')) {
-        const username = text.trim()
-        console.log(`Found username in dropdown: ${username}`)
-        
-        await storeUsernameInStorage(username)
-        
-        // Click to close the dropdown
-        element.click()
-        await sleep(2000)
-        
-        return username
-      }
-    }
-  }
-  
-  console.log('Username not found in dropdown, trying alternative methods...')
-  return await tryAlternativeUsernameExtraction()
+  // Method 3: Fallback - navigate to profile page to extract username
+  console.log('All methods failed, trying profile page navigation fallback...')
+  return await tryProfilePageFallback()
   
   } finally {
     isExtractingUsername = false
   }
 }
 
-// Alternative method to extract username
-async function tryAlternativeUsernameExtraction() {
-  console.log('Trying alternative username extraction methods...')
+// Fallback method - navigate to profile page to extract username
+async function tryProfilePageFallback() {
+  console.log('Attempting profile page navigation fallback...')
   
-  // Method 1: Look for username in meta tags or script tags
-  const scriptTags = document.querySelectorAll('script')
-  for (const script of scriptTags) {
-    if (script.textContent && script.textContent.includes('"user"')) {
-      const userMatch = script.textContent.match(/"name":"u\/([^"]+)"/)
-      if (userMatch) {
-        const username = `u/${userMatch[1]}`
-        console.log(`Found username in script tag: ${username}`)
-        await storeUsernameInStorage(username)
-        return username
-      }
+  // First, try to find any link to user profile in the current page
+  const profileLinks = document.querySelectorAll('a[href*="/user/"], a[href*="/u/"]')
+  if (profileLinks.length > 0) {
+    // Get the first profile link (likely our own)
+    const profileUrl = profileLinks[0].href
+    console.log(`Found profile link: ${profileUrl}`)
+    
+    // Extract username from URL
+    const urlMatch = profileUrl.match(/\/(user|u)\/([^\/]+)/)
+    if (urlMatch) {
+      const username = `u/${urlMatch[2]}`
+      console.log(`Extracted username from profile link: ${username}`)
+      await storeUsernameInStorage(username)
+      return username
     }
   }
   
-  // Method 2: Look for username in data attributes
-  const elementsWithData = document.querySelectorAll('*[data-name], *[data-user], *[data-username]')
-  for (const element of elementsWithData) {
-    for (const attr of element.attributes) {
-      if (attr.value && attr.value.includes('u/')) {
-        const match = attr.value.match(/u\/([a-zA-Z0-9_-]+)/)
-        if (match) {
-          const username = `u/${match[1]}`
-          console.log(`Found username in data attribute: ${username}`)
-          await storeUsernameInStorage(username)
-          return username
+  // If no profile link found, try opening dropdown again with longer wait
+  console.log('No profile link found, trying dropdown with extended wait...')
+  if (await openUserDropdown()) {
+    await sleep(3000) // Wait 3 seconds for dropdown to fully load
+    
+    const dropdownSelectors = [
+      'span.text-12.text-secondary-weak',
+      '[id*="user-drawer"] span[class*="text-12"]',
+      '.text-12'
+    ]
+    
+    for (const selector of dropdownSelectors) {
+      const elements = await waitForElements(selector, 5000)
+      for (const element of elements) {
+        const text = element.textContent?.trim()
+        if (text && text.startsWith('u/')) {
+          document.body.click() // Close dropdown
+          await sleep(500)
+          
+          cachedUsername = text
+          cacheTimestamp = Date.now()
+          await storeUsernameInStorage(text)
+          console.log(`Found username with extended wait: ${text}`)
+          return text
         }
       }
     }
   }
   
-  // Method 3: Manual prompt fallback
-  console.log('Could not automatically detect username')
+  console.log('Could not extract username using any method')
   return null
 }
 
@@ -1222,14 +1212,12 @@ async function handleExtractUsernameAndCreatePost() {
   
   if (username) {
     console.log(`Extracted username: ${username}`)
-    // Navigate to submit page and show welcome message
-    window.location.href = 'https://www.reddit.com/submit'
-    
-    // Store the username to use after navigation
+    // Store the username for later use
     sessionStorage.setItem('reddit-post-machine-username', username)
   } else {
     console.log('Could not extract username from page')
     showUsernameNotFoundMessage()
+    return
   }
 }
 
@@ -2414,9 +2402,25 @@ async function handleDeleteLastPost(userName) {
     if (deleteSuccess) {
       const messageDiv = createMessageDiv('✅', 'Post Deleted', 'Last post has been successfully deleted!', '#4caf50')
       showTemporaryMessage(messageDiv)
+      
+      // Notify background script of successful deletion
+      chrome.runtime.sendMessage({
+        type: 'ACTION_COMPLETED',
+        action: 'DELETE_POST_COMPLETED',
+        success: true,
+        postId: mostRecentPost.id || null
+      }).catch(() => {})
     } else {
       const messageDiv = createMessageDiv('❌', 'Delete Failed', 'Could not delete the post. Please try manually.', '#ff5722')
       showTemporaryMessage(messageDiv)
+      
+      // Notify background script of failed deletion
+      chrome.runtime.sendMessage({
+        type: 'ACTION_COMPLETED',
+        action: 'DELETE_POST_COMPLETED',
+        success: false,
+        error: 'Could not delete the post'
+      }).catch(() => {})
     }
     
   } catch (error) {

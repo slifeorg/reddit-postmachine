@@ -2,20 +2,9 @@
   <q-layout view="lHh Lpr lFf">
     <q-header elevated>
       <q-toolbar>
-        <q-btn
-          flat
-          dense
-          round
-          icon="menu"
-          aria-label="Menu"
-          @click="toggleLeftDrawer"
-        />
-
         <q-toolbar-title>
           Reddit Post Machine
         </q-toolbar-title>
-
-        <div>Quasar v{{ $q.version }}</div>
       </q-toolbar>
     </q-header>
 
@@ -55,18 +44,6 @@ const linksList = [
     caption: 'Main dashboard',
     icon: 'home',
     link: '/'
-  },
-  {
-    title: 'Options',
-    caption: 'Extension settings',
-    icon: 'settings',
-    link: '/options'
-  },
-  {
-    title: 'GitHub',
-    caption: 'github.com/reddit-postmachine',
-    icon: 'code',
-    link: 'https://github.com'
   }
 ]
 

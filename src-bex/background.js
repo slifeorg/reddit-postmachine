@@ -18,7 +18,112 @@ const SM_STEPS = {
 }
 
 const CHECK_INTERVAL = 121000;
-let checkIntervalId = null; 
+let checkIntervalId = null;
+
+// Auto-Flow State Manager for persistence across sessions
+class AutoFlowStateManager {
+  static STATE_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+  static getStateKey(userName) {
+    return `autoFlowState_${userName}`;
+  }
+
+  static async saveState(step, data = {}) {
+    const stateKey = this.getStateKey(data.userName || 'unknown');
+    const currentState = await this.getState(data.userName);
+    
+    // Determine if this is a retry of the same step or progression to a new step
+    let attemptCount = 1;
+    if (currentState && currentState.currentStep === step) {
+      // Same step - increment attempt count (retry)
+      attemptCount = (currentState.attemptCount || 1) + 1;
+      
+      // Prevent infinite loops by limiting retry attempts
+      if (attemptCount > 5) {
+        console.log(`[AutoFlowStateManager] ⚠️ Too many retry attempts (${attemptCount}) for step ${step}, clearing state for user ${data.userName}`);
+        await this.clearState(data.userName);
+        return;
+      }
+    } else if (currentState) {
+      // New step - reset attempt count to 1
+      console.log(`[AutoFlowStateManager] 🔄 Progressing from ${currentState.currentStep} to ${step}, resetting attempt count`);
+    }
+    
+    const state = {
+      status: 'in_progress',
+      currentStep: step,
+      attemptCount: attemptCount,
+      lastAttemptTimestamp: Date.now(),
+      targetAction: data.targetAction || 'create',
+      userName: data.userName || null,
+      lastPostToDelete: data.lastPostToDelete || null,
+      postData: data.postData || null,
+      decisionReport: data.decisionReport || null,
+      tabId: data.tabId || null,
+      ...data
+    };
+
+    try {
+      await chrome.storage.local.set({ [stateKey]: state });
+      console.log(`[AutoFlowStateManager] 💾 State saved: ${step} for user ${data.userName} (attempt ${attemptCount})`, state);
+    } catch (error) {
+      console.error('[AutoFlowStateManager] Failed to save state:', error);
+    }
+  }
+
+  static async getState(userName) {
+    try {
+      const stateKey = this.getStateKey(userName);
+      const result = await chrome.storage.local.get([stateKey]);
+      return result[stateKey] || null;
+    } catch (error) {
+      console.error('[AutoFlowStateManager] Failed to get state:', error);
+      return null;
+    }
+  }
+
+  static async clearState(userName) {
+    try {
+      const stateKey = this.getStateKey(userName);
+      await chrome.storage.local.remove([stateKey]);
+      console.log(`[AutoFlowStateManager] 🗑️ State cleared for user ${userName}`);
+    } catch (error) {
+      console.error('[AutoFlowStateManager] Failed to clear state:', error);
+    }
+  }
+
+  static async isStateStale(state) {
+    if (!state || !state.lastAttemptTimestamp) return true;
+    return (Date.now() - state.lastAttemptTimestamp) > this.STATE_EXPIRY_MS;
+  }
+
+  static async recoverState(userName) {
+    const state = await this.getState(userName);
+    if (!state) {
+      console.log(`[AutoFlowStateManager] No previous state found for user ${userName}`);
+      return null;
+    }
+
+    if (await this.isStateStale(state)) {
+      console.log(`[AutoFlowStateManager] Previous state is stale for user ${userName}, clearing it`);
+      await this.clearState(userName);
+      return null;
+    }
+
+    console.log(`[AutoFlowStateManager] 🔄 Recovering previous state for user ${userName}:`, state);
+    return state;
+  }
+
+  static async validateTab(tabId) {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      return tab && !tab.discarded;
+    } catch (error) {
+      console.log(`[AutoFlowStateManager] Tab ${tabId} is no longer valid:`, error.message);
+      return false;
+    }
+  }
+} 
 // Post data service with real API integration
 class PostDataService {
   static async generatePost(agentName) {
@@ -123,10 +228,13 @@ class PostDataService {
   }
   
   static async shouldCreatePost(postsData) {
+    // Save state before decision analysis
+    await AutoFlowStateManager.saveState('analyzing_posts', { postsData })
+    
     // Create decision report for logging and storage
     const decisionReport = {
       timestamp: new Date().toISOString(),
-      totalPosts: postsData?.posts?.length || 0,
+      totalPosts: postsData?.postsInfo?.posts?.length || 0,
       lastPostAge: null,
       lastPostStatus: 'unknown',
       decision: 'no_create',
@@ -138,7 +246,7 @@ class PostDataService {
     console.log(`[PostDataService] Analyzing ${decisionReport.totalPosts} posts for auto-flow decision`)
     
     // Analyze posts to determine if new post is needed
-    if (!postsData || !postsData.posts || postsData.posts.length === 0) {
+    if (!postsData || !postsData.postsInfo || !postsData.postsInfo.posts || postsData.postsInfo.posts.length === 0) {
       console.log('[PostDataService] ❌ DECISION: No posts found, should create new post')
       decisionReport.decision = 'create'
       decisionReport.reason = 'no_posts'
@@ -146,7 +254,7 @@ class PostDataService {
       return { shouldCreate: true, reason: 'no_posts', decisionReport }
     }
     
-    const lastPost = postsData.posts[0] // Most recent post
+    const lastPost = postsData.postsInfo.posts[0] // Most recent post
     const now = new Date()
     const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
     
@@ -155,21 +263,58 @@ class PostDataService {
     const ageInHours = (now - postDate) / (1000 * 60 * 60)
     decisionReport.lastPostAge = Math.round(ageInHours * 10) / 10 // Round to 1 decimal
     
-    console.log(`[PostDataService] 📊 Last post details:`)
+    console.log(`[PostDataService] 📊 Enhanced last post details:`)
     console.log(`   - Title: "${lastPost.title || 'No title'}"`)
     console.log(`   - Age: ${decisionReport.lastPostAge} hours ago`)
-    console.log(`   - URL: ${lastPost.postUrl || 'No URL'}`)
+    console.log(`   - URL: ${lastPost.url || 'No URL'}`)
+    console.log(`   - Author: ${lastPost.author || 'Unknown'}`)
+    console.log(`   - Subreddit: ${lastPost.subreddit || 'Unknown'}`)
+    console.log(`   - Score: ${lastPost.score || 0} | Comments: ${lastPost.commentCount || 0} | Awards: ${lastPost.awardCount || 0}`)
+    console.log(`   - Post Type: ${lastPost.postType || 'Unknown'} | Domain: ${lastPost.domain || 'N/A'}`)
     console.log(`   - Status: Removed=${lastPost.isRemoved}, Blocked=${lastPost.isBlocked}, Deleted=${lastPost.deleted}`)
-    console.log(`   - Score: ${lastPost.scoreValue || 0} | Downvotes: ${lastPost.hasDownvotes || false}`)
+    console.log(`   - Item State: ${lastPost.itemState || 'Unknown'} | View Context: ${lastPost.viewContext || 'Unknown'}`)
     
-    // Check if last post has downvotes (highest priority for deletion)
-    if (lastPost.hasDownvotes || lastPost.scoreValue < 0) {
-      console.log('[PostDataService] 👎 DECISION: Last post has downvotes, should create new post and delete downvoted post')
+    // Enhanced decision logic using new metadata
+    
+    // Priority 1: Check if post is in UNMODERATED state - wait for moderation
+    if (lastPost.itemState === 'UNMODERATED') {
+      console.log('[PostDataService] ⏳ DECISION: Last post is under moderation review, should wait')
+      decisionReport.decision = 'wait'
+      decisionReport.reason = 'under_moderation'
+      decisionReport.lastPostStatus = 'unmoderated'
+      this.saveDecisionReport(decisionReport)
+      return { shouldCreate: false, reason: 'under_moderation', lastPost: lastPost, decisionReport }
+    }
+    
+    // Priority 2: Check if last post has negative score (downvotes)
+    if (lastPost.score < 0) {
+      console.log('[PostDataService] 👎 DECISION: Last post has negative score, should create new post and delete downvoted post')
       decisionReport.decision = 'create_with_delete'
       decisionReport.reason = 'post_downvoted'
       decisionReport.lastPostStatus = lastPost.isRemoved ? 'removed' : lastPost.isBlocked ? 'blocked' : 'downvoted'
       this.saveDecisionReport(decisionReport)
       return { shouldCreate: true, reason: 'post_downvoted', lastPost: lastPost, decisionReport }
+    }
+    
+    // Priority 3: Check if last post is removed or blocked by moderators
+    if (lastPost.isRemoved || lastPost.isBlocked || lastPost.hasModeratorAction) {
+      console.log('[PostDataService] 🚫 DECISION: Last post was removed/blocked, should create new post and delete removed post')
+      decisionReport.decision = 'create_with_delete'
+      decisionReport.reason = 'post_removed'
+      decisionReport.lastPostStatus = lastPost.isRemoved ? 'removed' : lastPost.isBlocked ? 'blocked' : 'moderated'
+      this.saveDecisionReport(decisionReport)
+      return { shouldCreate: true, reason: 'post_removed', lastPost: lastPost, decisionReport }
+    }
+    
+    // Priority 4: Check if last post has very low engagement (score + comments)
+    const totalEngagement = (lastPost.score || 0) + (lastPost.commentCount || 0)
+    if (totalEngagement < 2) {
+      console.log('[PostDataService] 📉 DECISION: Last post has very low engagement (< 2), should create new post and delete low-performing post')
+      decisionReport.decision = 'create_with_delete'
+      decisionReport.reason = 'low_engagement'
+      decisionReport.lastPostStatus = 'low_engagement'
+      this.saveDecisionReport(decisionReport)
+      return { shouldCreate: true, reason: 'low_engagement', lastPost: lastPost, decisionReport }
     }
     
     // Check if last post is older than one week - if so, DO NOT delete it, just create new post
@@ -222,6 +367,19 @@ class PostDataService {
       console.log('[PostDataService] 💾 Decision report saved to storage:', decisionReport.decision)
     } catch (error) {
       console.error('[PostDataService] Failed to save decision report:', error)
+    }
+  }
+
+  // Save execution result to storage for popup visibility
+  static async saveExecutionResult(executionResult) {
+    try {
+      await chrome.storage.local.set({ 
+        lastExecutionResult: executionResult,
+        lastExecutionTimestamp: executionResult.timestamp
+      })
+      console.log('[PostDataService] 💾 Execution result saved to storage:', executionResult.status, '-', executionResult.postResult)
+    } catch (error) {
+      console.error('[PostDataService] Failed to save execution result:', error)
     }
   }
   
@@ -471,6 +629,9 @@ async function createCleanPostTab(userName, postData) {
 // Helper function to proceed with post creation
 async function proceedWithPostCreation(userName, monitoringTabId) {
     console.log('[BG] Proceeding with post creation');
+    
+    // Save state before post creation
+    await AutoFlowStateManager.saveState('creating_post', { userName, targetAction: 'create' })
     
     // Check if post creation is already in progress for this monitoring tab
     const state = tabStates[monitoringTabId];
@@ -920,7 +1081,7 @@ async function handleActionCompleted(tabId, action, success, data) {
         console.log('[BG] Analyzing posts data:', data);
         
         // Check if we need to make a new post based on post conditions
-        PostDataService.shouldCreatePost(data).then(result => {
+        PostDataService.shouldCreatePost(data).then(async result => {
             console.log('[BG] 🎯 FINAL DECISION RESULT:', {
                 shouldCreate: result.shouldCreate,
                 reason: result.reason,
@@ -933,6 +1094,17 @@ async function handleActionCompleted(tabId, action, success, data) {
                 // If we need to delete the last post first
                 if (result.lastPost && (result.reason === 'post_blocked' || result.reason === 'post_downvoted')) {
                     console.log('[BG] 🗑️ STEP 1: Attempting to delete last post before creating new one')
+                    
+                    // Mark that deletion precedes creation for proper execution result tracking
+                    state.deletingBeforeCreating = true;
+                    
+                    // Save state before deletion attempt
+                    await AutoFlowStateManager.saveState('deleting_post', { 
+                        userName: state.userName, 
+                        lastPostToDelete: result.lastPost,
+                        targetAction: 'delete_and_create',
+                        tabId 
+                    })
                     
                     // Use the same deletion flow as manual "Delete Last Post" button
                     chrome.tabs.sendMessage(tabId, {
@@ -947,6 +1119,18 @@ async function handleActionCompleted(tabId, action, success, data) {
                     }).catch(err => {
                         console.error('[BG] ❌ Failed to send delete command:', err)
                         console.log('[BG] ⚠️ FALLBACK: Proceeding with post creation anyway')
+                        
+                        // Store execution result for failed deletion
+                        const failedDeleteResult = {
+                            status: 'failed',
+                            postResult: 'error',
+                            postId: null,
+                            errorMessage: 'Failed to send delete command: ' + err.message,
+                            timestamp: Date.now()
+                        };
+                        
+                        PostDataService.saveExecutionResult(failedDeleteResult);
+                        state.deletingBeforeCreating = false;
                         proceedWithPostCreation(state.userName, tabId)
                     })
                 } else {
@@ -957,6 +1141,20 @@ async function handleActionCompleted(tabId, action, success, data) {
                 
             } else {
                 console.log('[BG] ✅ COMPLETE: No new post needed. Clearing state and waiting for next interval.')
+                
+                // Clear auto-flow state on completion
+                await AutoFlowStateManager.clearState(state.userName)
+                
+                // Store execution result for no action taken
+                const executionResult = {
+                    status: 'skipped',
+                    postResult: 'none',
+                    postId: null,
+                    errorMessage: null,
+                    timestamp: Date.now()
+                };
+                
+                PostDataService.saveExecutionResult(executionResult);
                 delete tabStates[tabId];
             }
         }).catch(err => {
@@ -967,7 +1165,37 @@ async function handleActionCompleted(tabId, action, success, data) {
         // Result is saved by content script via USER_STATUS_SAVED message
     } else if (action === 'POST_CREATION_COMPLETED') { 
         console.log('[BG] Posting process completed. Closing submit tab and opening reddit.com for status check.');
-        delete tabStates[tabId];
+        
+        // Check if this was part of a delete-then-create operation
+        const state = tabStates[tabId];
+        const wasDeletingBeforeCreating = state && state.deletingBeforeCreating;
+        
+        if (state) {
+            delete tabStates[tabId];
+        }
+        
+        // Store execution result for popup display
+        let postResult = message.success ? 'created' : 'error';
+        if (message.success && wasDeletingBeforeCreating) {
+            postResult = 'deleted_and_created';
+        }
+        
+        // Clear auto-flow state on successful completion
+        if (message.success) {
+            const userName = state?.userName || 'unknown';
+            await AutoFlowStateManager.clearState(userName);
+            console.log(`[BG] ✅ Auto-flow completed successfully, state cleared for user ${userName}`);
+        }
+        
+        const executionResult = {
+            status: message.success ? 'completed' : 'failed',
+            postResult: postResult,
+            postId: message.postId || null,
+            errorMessage: message.error || null,
+            timestamp: Date.now()
+        };
+        
+        PostDataService.saveExecutionResult(executionResult);
         
         // Close the submit tab if it exists (for both success and failure cases)
         try {
@@ -1024,12 +1252,29 @@ async function handleActionCompleted(tabId, action, success, data) {
                     }, 30000);
                     
                 } catch (error) {
-                    console.error('[BG] Failed to open reddit.com tab:', error);
+                    console.error('[BG] Failed to open reddit.com for status check:', error);
                 }
-            }, 1000);
-        } else {
-            console.log(`[BG] Post creation failed: ${message.error || 'Unknown error'}. Tab closed without opening status check.`);
+            }, 2000); // Give page 2 seconds to fully load
         }
+    } else if (action === 'DELETE_POST_COMPLETED') {
+        console.log('[BG] Delete post operation completed.');
+        
+        // Update state after deletion completion
+        await AutoFlowStateManager.saveState('deletion_completed', { 
+            success: message.success,
+            targetAction: 'delete_and_create'
+        })
+        
+        // Store execution result for delete operation
+        const executionResult = {
+            status: message.success ? 'completed' : 'failed',
+            postResult: message.success ? 'deleted' : 'error',
+            postId: message.postId || null,
+            errorMessage: message.error || null,
+            timestamp: Date.now()
+        };
+        
+        PostDataService.saveExecutionResult(executionResult);
     }
 }
 
@@ -1255,22 +1500,17 @@ function handleUserStatusSaved(statusData, sendResponse) {
 // Handle request to get user status
 async function handleGetUserStatus(sendResponse) {
   try {
-    // First try to get the fresh data from userStatusResult (where content script saves)
-    const localResult = await chrome.storage.local.get(['userStatusResult'])
-    if (localResult.userStatusResult) {
-      sendResponse({ success: true, data: localResult.userStatusResult })
+    // First try to get the fresh data from userStatus (where content script saves)
+    const localResult = await chrome.storage.local.get(['userStatus'])
+    if (localResult.userStatus) {
+      sendResponse({ success: true, data: localResult.userStatus })
       return
     }
     
-    // Fallback to old userStatus key for backward compatibility
+    // Fallback to sync storage for backward compatibility
     const syncResult = await chrome.storage.sync.get(['userStatus'])
     if (syncResult.userStatus) {
       sendResponse({ success: true, data: syncResult.userStatus })
-      return
-    }
-    const oldLocalResult = await chrome.storage.local.get(['userStatus'])
-    if (oldLocalResult.userStatus) {
-      sendResponse({ success: true, data: oldLocalResult.userStatus })
       return
     }
     sendResponse({ success: false, error: 'No user status found' })
@@ -1306,11 +1546,101 @@ async function handleCreatePostFromPopup(userName, sendResponse) {
   }
 }
 
+// Resume interrupted auto-flow from saved state
+async function resumeAutoFlow(state, sendResponse) {
+  console.log(`[BG] 🔄 Resuming auto-flow from step: ${state.currentStep}`)
+  
+  try {
+    switch (state.currentStep) {
+      case 'starting':
+      case 'analyzing_posts':
+        // Restart from the beginning with same user
+        await AutoFlowStateManager.saveState('starting', { userName: state.userName, targetAction: 'auto_flow' })
+        await handleCheckUserStatus(state.userName, sendResponse)
+        break
+        
+      case 'deleting_post':
+        console.log('[BG] 🔄 Resuming delete operation')
+        if (state.tabId && state.lastPostToDelete) {
+          // Validate tab exists before attempting to resume
+          const tabValid = await AutoFlowStateManager.validateTab(state.tabId)
+          if (tabValid) {
+            // Attempt to resume deletion
+            chrome.tabs.sendMessage(state.tabId, {
+              type: 'DELETE_LAST_POST',
+              userName: state.userName
+            }).then(response => {
+              console.log('[BG] Delete command sent successfully on resume:', response)
+              setTimeout(() => {
+                proceedWithPostCreation(state.userName, state.tabId)
+              }, 3000)
+            }).catch(err => {
+              console.error('[BG] ❌ Failed to resume delete command:', err)
+              proceedWithPostCreation(state.userName, state.tabId)
+            })
+          } else {
+            console.log('[BG] Tab is no longer valid, starting fresh')
+            await AutoFlowStateManager.clearState(state.userName)
+            await handleCheckUserStatus(state.userName, sendResponse)
+          }
+        } else {
+          console.log('[BG] Cannot resume deletion - missing tab or post info, starting fresh')
+          await AutoFlowStateManager.clearState(state.userName)
+          await handleCheckUserStatus(state.userName, sendResponse)
+        }
+        break
+        
+      case 'creating_post':
+        console.log('[BG] 🔄 Resuming post creation')
+        if (state.tabId) {
+          const tabValid = await AutoFlowStateManager.validateTab(state.tabId)
+          if (tabValid) {
+            proceedWithPostCreation(state.userName, state.tabId)
+          } else {
+            console.log('[BG] Tab is no longer valid, starting fresh')
+            await AutoFlowStateManager.clearState(state.userName)
+            await handleCheckUserStatus(state.userName, sendResponse)
+          }
+        } else {
+          console.log('[BG] Cannot resume post creation - missing tab info, starting fresh')
+          await AutoFlowStateManager.clearState(state.userName)
+          await handleCheckUserStatus(state.userName, sendResponse)
+        }
+        break
+        
+      default:
+        console.log(`[BG] Unknown step ${state.currentStep}, starting fresh`)
+        await AutoFlowStateManager.clearState(state.userName)
+        await handleCheckUserStatus(state.userName, sendResponse)
+        break
+    }
+  } catch (error) {
+    console.error('[BG] Failed to resume auto-flow:', error)
+    await AutoFlowStateManager.clearState(userName)
+    sendResponse({
+      success: false,
+      error: `Failed to resume auto-flow: ${error.message}`
+    })
+  }
+}
+
 // Handle check user status from popup - triggers auto flow
 async function handleCheckUserStatus(userName, sendResponse) {
   console.log(`[BG] User status check requested for ${userName} - starting auto flow`)
   
   try {
+    // Check for existing interrupted state and recover if needed
+    const existingState = await AutoFlowStateManager.recoverState(userName)
+    if (existingState) {
+      console.log(`[BG] 🔄 Resuming interrupted auto-flow for ${userName} at step: ${existingState.currentStep}`)
+      // Resume from the interrupted step
+      await resumeAutoFlow(existingState, sendResponse)
+      return
+    }
+    
+    // Save initial state
+    await AutoFlowStateManager.saveState('starting', { userName, targetAction: 'auto_flow' })
+    
     // Get current active tab or create new one for automation
     const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true })
     
@@ -1346,13 +1676,13 @@ async function handleCheckUserStatus(userName, sendResponse) {
     console.log(`[BG] Using existing tab ${tabId} for automation`)
     
     // Clean up any existing stuck state for this tab
-    const existingState = tabStates[tabId]
-    if (existingState) {
-      const stateAge = Date.now() - (existingState.stepStartTime || 0)
+    const existingTabState = tabStates[tabId]
+    if (existingTabState) {
+      const stateAge = Date.now() - (existingTabState.stepStartTime || 0)
       const isStuck = stateAge > 30000 // 30 seconds timeout
       
-      if (isStuck || existingState.status === SM_STEPS.COLLECTING_POSTS) {
-        console.log(`[BG] Cleaning up stuck state for tab ${tabId} (status: ${existingState.status}, age: ${stateAge}ms)`)
+      if (isStuck || existingTabState.status === SM_STEPS.COLLECTING_POSTS) {
+        console.log(`[BG] Cleaning up stuck state for tab ${tabId} (status: ${existingTabState.status}, age: ${stateAge}ms)`)
         delete tabStates[tabId]
       }
     }

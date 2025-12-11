@@ -98,6 +98,39 @@
         </q-card>
       </div>
 
+      <!-- Display auto-flow execution results if available -->
+      <div v-if="executionResult" class="q-mt-sm">
+        <q-card class="q-pa-sm execution-card">
+          <q-card-section class="q-pa-sm">
+            <div class="text-subtitle2 execution-title">
+              <q-icon :name="getExecutionIcon(executionResult.status)" class="q-mr-sm" />
+              Auto-Flow Execution Results
+            </div>
+            <div class="text-body2 q-mt-xs">
+              <div class="execution-item"><strong>Action Taken:</strong> 
+                <span :class="getExecutionStatusClass(executionResult.status)">
+                  {{ formatExecutionStatus(executionResult.status) }}
+                </span>
+              </div>
+              <div class="execution-item"><strong>Post Result:</strong> 
+                <span :class="getPostResultClass(executionResult.postResult)">
+                  {{ formatPostResult(executionResult.postResult) }}
+                </span>
+              </div>
+              <div v-if="executionResult.postId" class="execution-item">
+                <strong>Post ID:</strong> {{ executionResult.postId }}
+              </div>
+              <div v-if="executionResult.errorMessage" class="execution-item">
+                <strong>Error:</strong> <span class="text-negative">{{ executionResult.errorMessage }}</span>
+              </div>
+              <div class="text-caption execution-time">
+                Executed {{ formatTimestamp(executionResult.timestamp) }}
+              </div>
+            </div>
+          </q-card-section>
+        </q-card>
+      </div>
+
       <q-btn
         v-if="storedUsername"
         class="full-width"
@@ -132,6 +165,7 @@ export default defineComponent({
     const userStatus = ref(null)
     const postsData = ref(null)
     const decisionReport = ref(null)
+    const executionResult = ref(null)
 
     // Computed property for short last post text display
     const shortLastPostText = computed(() => {
@@ -220,6 +254,26 @@ export default defineComponent({
       }
     }
 
+    // Load execution result when popup opens
+    const loadExecutionResult = async () => {
+      try {
+        const result = await new Promise((resolve) => {
+          chrome.storage.local.get(['lastExecutionResult'], resolve)
+        })
+
+        if (result.lastExecutionResult) {
+          executionResult.value = result.lastExecutionResult
+          console.log('Popup: Loaded execution result:', result.lastExecutionResult)
+        } else {
+          console.log('Popup: No execution result found')
+          executionResult.value = null
+        }
+      } catch (error) {
+        console.error('Popup: Error loading execution result:', error)
+        executionResult.value = null
+      }
+    }
+
     // Format status for display
     const formatStatus = (status) => {
       const statusMap = {
@@ -252,6 +306,29 @@ export default defineComponent({
         'recent_post': 'Last post is recent and active'
       }
       return reasonMap[reason] || reason
+    }
+
+    // Format execution status for display
+    const formatExecutionStatus = (status) => {
+      const statusMap = {
+        'completed': '✅ Completed',
+        'failed': '❌ Failed',
+        'skipped': '⏭️ Skipped',
+        'in_progress': '🔄 In Progress'
+      }
+      return statusMap[status] || status
+    }
+
+    // Format post result for display
+    const formatPostResult = (result) => {
+      const resultMap = {
+        'created': '📝 Post Created',
+        'deleted': '🗑️ Post Deleted',
+        'deleted_and_created': '🗑️📝 Deleted & Created',
+        'none': '⏸️ No Action Taken',
+        'error': '❌ Error Occurred'
+      }
+      return resultMap[result] || result
     }
 
     // Get decision card CSS class
@@ -293,6 +370,40 @@ export default defineComponent({
         'create_with_delete': 'text-negative'
       }
       return classMap[decision] || ''
+    }
+
+    // Get execution icon
+    const getExecutionIcon = (status) => {
+      const iconMap = {
+        'completed': 'check_circle',
+        'failed': 'error',
+        'skipped': 'skip_next',
+        'in_progress': 'refresh'
+      }
+      return iconMap[status] || 'info'
+    }
+
+    // Get execution status CSS class
+    const getExecutionStatusClass = (status) => {
+      const classMap = {
+        'completed': 'text-positive',
+        'failed': 'text-negative',
+        'skipped': 'text-warning',
+        'in_progress': 'text-info'
+      }
+      return classMap[status] || ''
+    }
+
+    // Get post result CSS class
+    const getPostResultClass = (result) => {
+      const classMap = {
+        'created': 'text-positive',
+        'deleted': 'text-negative',
+        'deleted_and_created': 'text-warning',
+        'none': 'text-grey',
+        'error': 'text-negative'
+      }
+      return classMap[result] || ''
     }
     const loadUserStatus = async () => {
       try {
@@ -363,6 +474,7 @@ export default defineComponent({
       loadUserStatus()
       loadPostsData()
       loadDecisionReport()
+      loadExecutionResult()
     })
 
     // Listen for messages from content script
@@ -404,6 +516,13 @@ export default defineComponent({
           decisionReport.value = changes.lastDecisionReport.newValue;
           console.log('Popup: Decision report updated via storage listener');
           console.log('Popup: New decision report:', changes.lastDecisionReport.newValue);
+        }
+        
+        // Listen for execution result changes in local storage
+        if (area === 'local' && changes.lastExecutionResult && changes.lastExecutionResult.newValue) {
+          executionResult.value = changes.lastExecutionResult.newValue;
+          console.log('Popup: Execution result updated via storage listener');
+          console.log('Popup: New execution result:', changes.lastExecutionResult.newValue);
         }
       })
     }
@@ -640,21 +759,46 @@ export default defineComponent({
       // TODO: Open help documentation
     }
 
+    // Test function to create mock execution result
+    const testExecutionResult = async () => {
+      const mockResult = {
+        status: 'completed',
+        postResult: 'created',
+        postId: 'test12345',
+        errorMessage: null,
+        timestamp: Date.now()
+      }
+      
+      try {
+        await chrome.storage.local.set({ lastExecutionResult: mockResult })
+        console.log('Test execution result saved:', mockResult)
+        loadExecutionResult()
+      } catch (error) {
+        console.error('Failed to save test execution result:', error)
+      }
+    }
+
     return {
       storedUsername,
       userStatus,
       postsData,
       decisionReport,
+      executionResult,
       shortLastPostText,
       formatLastPostText,
       formatTimestamp,
       formatStatus,
       formatDecision,
       formatReason,
+      formatExecutionStatus,
+      formatPostResult,
       getDecisionCardClass,
       getDecisionIcon,
       getStatusClass,
       getDecisionClass,
+      getExecutionIcon,
+      getExecutionStatusClass,
+      getPostResultClass,
       createPost,
       detectUser,
       checkUserStatus,
@@ -663,7 +807,8 @@ export default defineComponent({
       schedulePost,
       openSettings,
       openHelp,
-      refreshPostsData
+      refreshPostsData,
+      testExecutionResult
     }
   }
 })
@@ -715,6 +860,31 @@ export default defineComponent({
 }
 
 .decision-time {
+  margin-top: 8px;
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 11px;
+}
+
+.execution-card {
+  background: linear-gradient(135deg, #7e57c2 0%, #9575cd 100%);
+  color: white;
+  border-radius: 12px;
+  box-shadow: 0 4px 12px rgba(126, 87, 194, 0.3);
+}
+
+.execution-title {
+  display: flex;
+  align-items: center;
+  font-weight: 600;
+  color: white;
+}
+
+.execution-item {
+  margin-bottom: 4px;
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.execution-time {
   margin-top: 8px;
   color: rgba(255, 255, 255, 0.8);
   font-size: 11px;
