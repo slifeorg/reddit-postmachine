@@ -20,6 +20,19 @@ const SM_STEPS = {
 const CHECK_INTERVAL = 121000;
 let checkIntervalId = null;
 
+const STALL_TIMEOUT_MS = 5 * 60 * 1000;
+let stallWatchdogIntervalId = null;
+
+function touchTabState(state) {
+  if (state) state.lastFeedbackTimestamp = Date.now();
+}
+
+async function restartAutoFlowFromBeginning(userName) {
+  if (!userName) return;
+  await AutoFlowStateManager.clearState(userName);
+  handleCheckUserStatus(userName, () => {});
+}
+
 // Auto-Flow State Manager for persistence across sessions
 class AutoFlowStateManager {
   static STATE_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -29,8 +42,11 @@ class AutoFlowStateManager {
   }
 
   static async saveState(step, data = {}) {
-    const stateKey = this.getStateKey(data.userName || 'unknown');
-    const currentState = await this.getState(data.userName);
+    const userName = data.userName;
+    if (!userName) return;
+
+    const stateKey = this.getStateKey(userName);
+    const currentState = await this.getState(userName);
     
     // Determine if this is a retry of the same step or progression to a new step
     let attemptCount = 1;
@@ -73,6 +89,7 @@ class AutoFlowStateManager {
 
   static async getState(userName) {
     try {
+      if (!userName) return null;
       const stateKey = this.getStateKey(userName);
       const result = await chrome.storage.local.get([stateKey]);
       return result[stateKey] || null;
@@ -84,6 +101,7 @@ class AutoFlowStateManager {
 
   static async clearState(userName) {
     try {
+      if (!userName) return;
       const stateKey = this.getStateKey(userName);
       await chrome.storage.local.remove([stateKey]);
       console.log(`[AutoFlowStateManager] 🗑️ State cleared for user ${userName}`);
@@ -226,10 +244,24 @@ class PostDataService {
       }
     }
   }
+
+  static normalizeLatestPostsData(latestPostsData, userName) {
+    if (!latestPostsData) return null
+    const posts = latestPostsData?.postsInfo?.posts || latestPostsData?.posts
+    if (!Array.isArray(posts)) return null
+
+    const ts = latestPostsData?.lastUpdated || latestPostsData?.timestamp || latestPostsData?.lastUpdate || null
+
+    return {
+      userName,
+      postsInfo: { posts },
+      lastUpdated: ts
+    }
+  }
   
   static async shouldCreatePost(postsData) {
     // Save state before decision analysis
-    await AutoFlowStateManager.saveState('analyzing_posts', { postsData })
+    await AutoFlowStateManager.saveState('analyzing_posts', { postsData, userName: postsData?.userName })
     
     // Create decision report for logging and storage
     const decisionReport = {
@@ -278,12 +310,21 @@ class PostDataService {
     
     // Priority 1: Check if post is in UNMODERATED state - wait for moderation
     if (lastPost.itemState === 'UNMODERATED') {
-      console.log('[PostDataService] ⏳ DECISION: Last post is under moderation review, should wait')
-      decisionReport.decision = 'wait'
-      decisionReport.reason = 'under_moderation'
+      if (ageInHours <= 1) {
+        console.log('[PostDataService] ⏳ DECISION: Last post is under moderation review, should wait')
+        decisionReport.decision = 'wait'
+        decisionReport.reason = 'under_moderation'
+        decisionReport.lastPostStatus = 'unmoderated'
+        this.saveDecisionReport(decisionReport)
+        return { shouldCreate: false, reason: 'under_moderation', lastPost: lastPost, decisionReport }
+      }
+
+      console.log('[PostDataService] ⏰ DECISION: Last post is still unmoderated but older than 1 hour, should create new post')
+      decisionReport.decision = 'create'
+      decisionReport.reason = 'stale_unmoderated'
       decisionReport.lastPostStatus = 'unmoderated'
       this.saveDecisionReport(decisionReport)
-      return { shouldCreate: false, reason: 'under_moderation', lastPost: lastPost, decisionReport }
+      return { shouldCreate: true, reason: 'stale_unmoderated', lastPost: lastPost, decisionReport }
     }
     
     // Priority 2: Check if last post has negative score (downvotes)
@@ -304,6 +345,15 @@ class PostDataService {
       decisionReport.lastPostStatus = lastPost.isRemoved ? 'removed' : lastPost.isBlocked ? 'blocked' : 'moderated'
       this.saveDecisionReport(decisionReport)
       return { shouldCreate: true, reason: 'post_removed', lastPost: lastPost, decisionReport }
+    }
+
+    if (ageInHours < 24) {
+      console.log('[PostDataService] ✅ DECISION: Last post is recent (< 24h), skipping engagement-based creation')
+      decisionReport.decision = 'no_create'
+      decisionReport.reason = 'recent_post'
+      decisionReport.lastPostStatus = 'active'
+      this.saveDecisionReport(decisionReport)
+      return { shouldCreate: false, reason: 'recent_post', decisionReport }
     }
     
     // Priority 4: Check if last post has very low engagement (score + comments)
@@ -434,7 +484,7 @@ async function fetchNextPost() {
     console.log(`[BG] Using agent name: ${agentName}`)
     
     // Check if we should create a post
-    if (await PostDataService.shouldCreatePost()) {
+    if (await PostDataService.shouldCreatePost({ userName: agentName })) {
       const postData = await PostDataService.generatePost(agentName)
       console.log('[BG] API service says: CREATE POST')
       return postData
@@ -489,6 +539,31 @@ async function triggerPeriodicCheck(tabId, userName) {
     }
 
     console.log(`[BG] Triggering periodic post check for ${userName}`);
+
+    try {
+        const { latestPostsData } = await chrome.storage.local.get(['latestPostsData'])
+        const cachedUser = latestPostsData?.username || latestPostsData?.userName || null
+        if (latestPostsData && (!cachedUser || cachedUser.replace('u/', '') === userName.replace('u/', ''))) {
+            const normalized = PostDataService.normalizeLatestPostsData(latestPostsData, userName)
+            const lastUpdated = normalized?.lastUpdated
+            if (normalized && lastUpdated && (Date.now() - lastUpdated) < 5 * 60 * 1000) {
+                const result = await PostDataService.shouldCreatePost(normalized)
+                if (!result?.shouldCreate) {
+                    await AutoFlowStateManager.clearState(userName)
+                    PostDataService.saveExecutionResult({
+                        status: 'skipped',
+                        postResult: 'none',
+                        postId: null,
+                        errorMessage: null,
+                        timestamp: Date.now()
+                    })
+                    finalizeAutoFlowToSubmitted(tabId, userName)
+                    return
+                }
+            }
+        }
+    } catch (e) {
+    }
     
     // Clean username for URL construction
     const cleanUsername = userName.replace('u/', '');
@@ -501,6 +576,7 @@ async function triggerPeriodicCheck(tabId, userName) {
         status: SM_STEPS.COLLECTING_POSTS, // Skip navigation steps, go directly to collection
         userName: userName,
         stepStartTime: Date.now(),
+        lastFeedbackTimestamp: Date.now(),
         advancedToNavigatingPosts: true, // Mark as already completed
         advancedToCollecting: false,
         usedDirectNavigation: true // Flag to indicate direct navigation was used
@@ -524,10 +600,7 @@ async function triggerPeriodicCheck(tabId, userName) {
                 logToTab(tabId, 'Backup trigger: Tab fully loaded, starting post collection.');
                 
                 setTimeout(() => {
-                    chrome.tabs.sendMessage(tabId, {
-                        type: 'REDDIT_POST_MACHINE_GET_POSTS',
-                        payload: { userName: state.userName }
-                    }).catch(err => console.error('[BG] Backup trigger failed to send GET_POSTS:', err));
+                    sendGetPosts(tabId, state.userName, 'backup_trigger');
                 }, 1000);
                 
                 // Remove this backup listener
@@ -555,19 +628,123 @@ function logToTab(tabId, message) {
     }
 }
 
+const finalizeReloadListeners = {}
+const finalizeReloadTimeouts = {}
+
+async function finalizeAutoFlowToSubmitted(tabId, userName) {
+    if (!tabId || !userName) return
+    const cleanUsername = userName.replace('u/', '')
+    const submittedUrl = `https://www.reddit.com/user/${cleanUsername}/submitted/`
+
+    if (finalizeReloadListeners[tabId]) {
+        chrome.tabs.onUpdated.removeListener(finalizeReloadListeners[tabId])
+        delete finalizeReloadListeners[tabId]
+    }
+
+    if (finalizeReloadTimeouts[tabId]) {
+        clearTimeout(finalizeReloadTimeouts[tabId])
+        delete finalizeReloadTimeouts[tabId]
+    }
+
+    try {
+        const tab = await chrome.tabs.get(tabId)
+        if (tab?.url && tab.url.includes(`/user/${cleanUsername}/`) && tab.url.includes('/submitted')) {
+            chrome.tabs.reload(tabId).catch(() => {})
+            return
+        }
+    } catch (e) {
+    }
+
+    const listener = (updatedTabId, changeInfo, tab) => {
+        if (updatedTabId !== tabId) return
+        if (changeInfo.status !== 'complete') return
+        if (!tab?.url || !tab.url.includes(`/user/${cleanUsername}/`) || !tab.url.includes('/submitted')) return
+
+        chrome.tabs.onUpdated.removeListener(listener)
+        delete finalizeReloadListeners[tabId]
+
+        if (finalizeReloadTimeouts[tabId]) {
+            clearTimeout(finalizeReloadTimeouts[tabId])
+            delete finalizeReloadTimeouts[tabId]
+        }
+
+        chrome.tabs.reload(tabId).catch(() => {})
+    }
+
+    finalizeReloadListeners[tabId] = listener
+    chrome.tabs.onUpdated.addListener(listener)
+
+    finalizeReloadTimeouts[tabId] = setTimeout(() => {
+        if (finalizeReloadListeners[tabId] === listener) {
+            chrome.tabs.onUpdated.removeListener(listener)
+            delete finalizeReloadListeners[tabId]
+        }
+        delete finalizeReloadTimeouts[tabId]
+    }, 30000)
+
+    chrome.tabs.update(tabId, { url: submittedUrl, active: true }).catch(() => {
+        chrome.tabs.onUpdated.removeListener(listener)
+        delete finalizeReloadListeners[tabId]
+
+        if (finalizeReloadTimeouts[tabId]) {
+            clearTimeout(finalizeReloadTimeouts[tabId])
+            delete finalizeReloadTimeouts[tabId]
+        }
+    })
+}
+
+async function waitForContentScript(tabId, { retries = 12, initialDelayMs = 250 } = {}) {
+    let delayMs = initialDelayMs;
+    for (let i = 0; i < retries; i++) {
+        try {
+            const tab = await chrome.tabs.get(tabId);
+            if (!tab || tab.discarded) {
+                await new Promise(resolve => setTimeout(resolve, delayMs));
+                delayMs = Math.min(2000, Math.floor(delayMs * 1.6));
+                continue;
+            }
+            if (tab.status !== 'complete') {
+                await new Promise(resolve => setTimeout(resolve, delayMs));
+                delayMs = Math.min(2000, Math.floor(delayMs * 1.6));
+                continue;
+            }
+
+            const res = await chrome.tabs.sendMessage(tabId, { type: 'PING' });
+            if (res && res.pong) return true;
+        } catch (e) {
+        }
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+        delayMs = Math.min(2000, Math.floor(delayMs * 1.6));
+    }
+    return false;
+}
+
+async function sendGetPosts(tabId, userName, source) {
+    const ready = await waitForContentScript(tabId);
+    if (!ready) {
+        console.error(`[BG] Content script not reachable in tab ${tabId}, cannot send GET_POSTS (${source})`);
+        logToTab(tabId, `Content script not reachable; skipping post collection (${source}).`);
+        delete tabStates[tabId];
+        return false;
+    }
+
+    try {
+        await chrome.tabs.sendMessage(tabId, {
+            type: 'REDDIT_POST_MACHINE_GET_POSTS',
+            payload: { userName }
+        });
+        return true;
+    } catch (err) {
+        console.error(`[BG] Failed to send GET_POSTS (${source}):`, err);
+        delete tabStates[tabId];
+        return false;
+    }
+}
+
 // Kill current Reddit tab and create new clean tab for post submission
 async function createCleanPostTab(userName, postData) {
     try {
         console.log('[BG] Creating clean post tab - closing current Reddit tabs first')
-        
-        // Get current active tab
-        const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true })
-        
-        // Close current Reddit tab if it exists
-        if (currentTab && (currentTab.url.includes('reddit.com') || currentTab.url.includes('old.reddit.com'))) {
-            console.log(`[BG] Closing current Reddit tab ${currentTab.id}`)
-            await chrome.tabs.remove(currentTab.id)
-        }
         
         // Clean subreddit name to remove existing "r/" prefix if present
         const cleanSubreddit = (postData.subreddit || 'test').replace(/^r\//i, '')
@@ -585,6 +762,7 @@ async function createCleanPostTab(userName, postData) {
             userName: userName,
             postData: postData,
             stepStartTime: Date.now(),
+            lastFeedbackTimestamp: Date.now(),
             isPostTab: true,
             isCleanTab: true // Flag to indicate this is a fresh clean tab
         }
@@ -944,6 +1122,8 @@ function handleContentScriptReady(tabId, url) {
 
 function checkAndAdvanceState(tabId, state, url) {
     console.log(`[Auto Check] Checking state for tab ${tabId}. Status: ${state.status}, URL: ${url}`);
+
+    touchTabState(state)
     
     if (state.status === SM_STEPS.NAVIGATING_PROFILE) {
         if (url.includes(state.userName.replace('u/', ''))) {
@@ -969,11 +1149,8 @@ function checkAndAdvanceState(tabId, state, url) {
                  state.advancedToCollecting = true;
                  logToTab(tabId, 'Fast-track: Landed on posts page. Advancing to COLLECTING_POSTS.');
                  state.status = SM_STEPS.COLLECTING_POSTS;
-                 
-                 chrome.tabs.sendMessage(tabId, {
-                     type: 'REDDIT_POST_MACHINE_GET_POSTS',
-                     payload: { userName: state.userName }
-                 }).catch(err => console.error('[Auto Check] Failed to send GET_POSTS:', err));
+
+                 sendGetPosts(tabId, state.userName, 'fast_track_navigating_posts');
              }
         }
         // Removed the retry logic here - it was causing duplicate commands
@@ -985,10 +1162,7 @@ function checkAndAdvanceState(tabId, state, url) {
             
             // Send GET_POSTS command immediately after a short delay to ensure page is ready
             setTimeout(() => {
-                chrome.tabs.sendMessage(tabId, {
-                    type: 'REDDIT_POST_MACHINE_GET_POSTS',
-                    payload: { userName: state.userName }
-                }).catch(err => console.error('[Auto Check] Failed to send GET_POSTS for direct navigation:', err));
+                sendGetPosts(tabId, state.userName, 'direct_navigation');
             }, 2000); // Give page 2 seconds to fully load
         }
     }
@@ -1006,6 +1180,8 @@ async function handleActionCompleted(tabId, action, success, data) {
 
     logToTab(tabId, `Action completed in tab ${tabId}: ${action} (Success: ${success})`)
 
+    touchTabState(state)
+
     if (!success) {
         console.warn(`Action ${action} failed. Aborting automation.`)
         delete tabStates[tabId]
@@ -1022,6 +1198,7 @@ async function handleActionCompleted(tabId, action, success, data) {
             
             state.status = SM_STEPS.NAVIGATING_POSTS
             state.stepStartTime = Date.now()
+            touchTabState(state)
             
             // Trigger next step
             setTimeout(() => {
@@ -1042,13 +1219,11 @@ async function handleActionCompleted(tabId, action, success, data) {
             
             state.status = SM_STEPS.COLLECTING_POSTS
             state.stepStartTime = Date.now()
+            touchTabState(state)
             
             setTimeout(() => {
                 logToTab(tabId, 'Sending GET_POSTS command');
-                chrome.tabs.sendMessage(tabId, {
-                    type: 'REDDIT_POST_MACHINE_GET_POSTS',
-                    payload: { userName: state.userName }
-                }).catch(err => console.error(`[State Machine] Error sending GET_POSTS:`, err))
+                sendGetPosts(tabId, state.userName, 'state_machine_navigate_posts');
             }, 1500)
         } else {
             console.log('[BG] Already advanced to COLLECTING_POSTS via fast-track. Skipping.');
@@ -1081,7 +1256,7 @@ async function handleActionCompleted(tabId, action, success, data) {
         console.log('[BG] Analyzing posts data:', data);
         
         // Check if we need to make a new post based on post conditions
-        PostDataService.shouldCreatePost(data).then(async result => {
+        PostDataService.shouldCreatePost({ ...data, userName: state.userName }).then(async result => {
             console.log('[BG] 🎯 FINAL DECISION RESULT:', {
                 shouldCreate: result.shouldCreate,
                 reason: result.reason,
@@ -1155,7 +1330,9 @@ async function handleActionCompleted(tabId, action, success, data) {
                 };
                 
                 PostDataService.saveExecutionResult(executionResult);
+                const userName = state.userName
                 delete tabStates[tabId];
+                finalizeAutoFlowToSubmitted(tabId, userName)
             }
         }).catch(err => {
             console.error('[BG] ❌ ERROR: Error analyzing posts:', err)
@@ -1169,29 +1346,30 @@ async function handleActionCompleted(tabId, action, success, data) {
         // Check if this was part of a delete-then-create operation
         const state = tabStates[tabId];
         const wasDeletingBeforeCreating = state && state.deletingBeforeCreating;
+        let userName = state?.userName
         
         if (state) {
             delete tabStates[tabId];
         }
         
         // Store execution result for popup display
-        let postResult = message.success ? 'created' : 'error';
-        if (message.success && wasDeletingBeforeCreating) {
+        let postResult = success ? 'created' : 'error';
+        if (success && wasDeletingBeforeCreating) {
             postResult = 'deleted_and_created';
         }
         
         // Clear auto-flow state on successful completion
-        if (message.success) {
-            const userName = state?.userName || 'unknown';
+        if (success) {
             await AutoFlowStateManager.clearState(userName);
+            await chrome.storage.local.remove(['latestPostsData'])
             console.log(`[BG] ✅ Auto-flow completed successfully, state cleared for user ${userName}`);
         }
         
         const executionResult = {
-            status: message.success ? 'completed' : 'failed',
+            status: success ? 'completed' : 'failed',
             postResult: postResult,
-            postId: message.postId || null,
-            errorMessage: message.error || null,
+            postId: data?.postId || null,
+            errorMessage: data?.error || null,
             timestamp: Date.now()
         };
         
@@ -1208,73 +1386,56 @@ async function handleActionCompleted(tabId, action, success, data) {
             console.warn(`[BG] Submit tab ${tabId} already closed or not found:`, error);
         }
         
-        // Only open reddit.com for status checking if post was successful
-        if (message.success) {
-            // Open reddit.com and start status checking
+        if (success && !userName) {
+            try {
+                const syncResult = await chrome.storage.sync.get(['redditUser'])
+                const localResult = await chrome.storage.local.get(['redditUser'])
+                userName = syncResult.redditUser?.seren_name || localResult.redditUser?.seren_name
+            } catch (e) {
+            }
+        }
+
+        if (success && userName) {
             setTimeout(async () => {
                 try {
+                    const cleanUsername = userName.replace('u/', '')
                     const newTab = await chrome.tabs.create({
-                        url: 'https://www.reddit.com',
+                        url: `https://www.reddit.com/user/${cleanUsername}/submitted/`,
                         active: true
-                    });
-                    console.log(`[BG] Opened reddit.com tab ${newTab.id} for status checking`);
-                    
-                    // Wait for tab to complete loading before sending status check
-                    const tabLoadListener = (updatedTabId, changeInfo) => {
-                        if (updatedTabId === newTab.id && changeInfo.status === 'complete') {
-                            chrome.tabs.onUpdated.removeListener(tabLoadListener);
-                            clearTimeout(loadTimeout);
-                            
-                            // Send status check after a short delay for content script to initialize
-                            setTimeout(async () => {
-                                try {
-                                    // Verify tab still exists before sending message
-                                    await chrome.tabs.get(newTab.id);
-                                    chrome.tabs.sendMessage(newTab.id, {
-                                        type: 'CHECK_USER_STATUS',
-                                        userName: 'AutoUser'
-                                    }).catch(err => {
-                                        console.error(`[BG] Failed to start status check on tab ${newTab.id}:`, err);
-                                    });
-                                } catch (tabError) {
-                                    console.warn(`[BG] Tab ${newTab.id} no longer exists, skipping status check`);
-                                }
-                            }, 1000);
-                        }
-                    };
-                    
-                    chrome.tabs.onUpdated.addListener(tabLoadListener);
-                    
-                    // Add timeout fallback to clean up listener if tab never loads
-                    const loadTimeout = setTimeout(() => {
-                        chrome.tabs.onUpdated.removeListener(tabLoadListener);
-                        console.warn(`[BG] Tab ${newTab.id} load timeout, removing listener`);
-                    }, 30000);
-                    
+                    })
+                    finalizeAutoFlowToSubmitted(newTab.id, userName)
                 } catch (error) {
-                    console.error('[BG] Failed to open reddit.com for status check:', error);
+                    console.error('[BG] Failed to open submitted posts page after post creation:', error)
                 }
-            }, 2000); // Give page 2 seconds to fully load
+            }, 1000)
         }
     } else if (action === 'DELETE_POST_COMPLETED') {
         console.log('[BG] Delete post operation completed.');
+
+        const state = tabStates[tabId]
+        const userName = state?.userName || data?.userName
         
         // Update state after deletion completion
         await AutoFlowStateManager.saveState('deletion_completed', { 
-            success: message.success,
+            userName,
+            success: success,
             targetAction: 'delete_and_create'
         })
         
         // Store execution result for delete operation
         const executionResult = {
-            status: message.success ? 'completed' : 'failed',
-            postResult: message.success ? 'deleted' : 'error',
-            postId: message.postId || null,
-            errorMessage: message.error || null,
+            status: success ? 'completed' : 'failed',
+            postResult: success ? 'deleted' : 'error',
+            postId: data?.postId || null,
+            errorMessage: data?.error || null,
             timestamp: Date.now()
         };
         
         PostDataService.saveExecutionResult(executionResult);
+
+        if (success) {
+            await chrome.storage.local.remove(['latestPostsData'])
+        }
     }
 }
 
@@ -1554,8 +1715,7 @@ async function resumeAutoFlow(state, sendResponse) {
     switch (state.currentStep) {
       case 'starting':
       case 'analyzing_posts':
-        // Restart from the beginning with same user
-        await AutoFlowStateManager.saveState('starting', { userName: state.userName, targetAction: 'auto_flow' })
+        await AutoFlowStateManager.clearState(state.userName)
         await handleCheckUserStatus(state.userName, sendResponse)
         break
         
@@ -1616,7 +1776,7 @@ async function resumeAutoFlow(state, sendResponse) {
     }
   } catch (error) {
     console.error('[BG] Failed to resume auto-flow:', error)
-    await AutoFlowStateManager.clearState(userName)
+    await AutoFlowStateManager.clearState(state?.userName)
     sendResponse({
       success: false,
       error: `Failed to resume auto-flow: ${error.message}`
@@ -1738,15 +1898,7 @@ async function handleCloseCurrentTab(tabId, sendResponse) {
       console.log(`[BG] Successfully closed tab ${tabId}`)
       sendResponse({ success: true })
     } else {
-      // If no tabId, close the current active tab
-      const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
-      if (tabs.length > 0) {
-        await chrome.tabs.remove(tabs[0].id)
-        console.log(`[BG] Successfully closed active tab ${tabs[0].id}`)
-        sendResponse({ success: true })
-      } else {
-        sendResponse({ success: false, error: 'No active tab found' })
-      }
+      sendResponse({ success: false, error: 'No tabId provided for CLOSE_CURRENT_TAB' })
     }
   } catch (error) {
     console.error('[BG] Failed to close tab:', error)
@@ -1992,4 +2144,22 @@ async function handleReuseRedditTab(targetUrl, action, sendResponse) {
 // Export default function for Quasar bridge compatibility
 export default bexBackground((bridge) => {
   console.log('Background script bridge initialized', bridge)
+
+  chrome.storage.local.remove(['autoFlowState_unknown']).catch(() => {})
+
+  if (stallWatchdogIntervalId) clearInterval(stallWatchdogIntervalId)
+  stallWatchdogIntervalId = setInterval(() => {
+    const now = Date.now()
+    for (const [tabIdStr, state] of Object.entries(tabStates)) {
+      if (!state) continue
+      if (state.status === SM_STEPS.POSTING) continue
+      const lastTs = state.lastFeedbackTimestamp || state.stepStartTime
+      if (!lastTs) continue
+      if (now - lastTs <= STALL_TIMEOUT_MS) continue
+
+      const userName = state.userName
+      delete tabStates[tabIdStr]
+      restartAutoFlowFromBeginning(userName).catch(() => {})
+    }
+  }, 30000)
 })

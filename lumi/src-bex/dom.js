@@ -768,7 +768,7 @@ Object.assign(RedditDOMHelper, {
     await this.sleep(3000)
 
     // Get all posts using comprehensive selectors
-    const posts = this.qsAll('shreddit-post, [data-testid="post-container"], .Post, [data-testid*="post"]')
+    const posts = this.qsAll('shreddit-post, [data-testid="post-container"], .Post')
     console.log(`Found ${posts.length} posts`)
 
     if (posts.length > 0) {
@@ -781,6 +781,10 @@ Object.assign(RedditDOMHelper, {
       
       // Enhanced post data extraction with metadata
       const postsWithMetadata = posts.map(post => {
+        if (post?.getAttribute && post.getAttribute('data-testid') === 'create-post') {
+          return null
+        }
+
         // Extract data attributes from shreddit-post element
         const postAttributes = {
           postTitle: post.getAttribute('post-title'),
@@ -871,6 +875,7 @@ Object.assign(RedditDOMHelper, {
           subredditId: postAttributes.subredditId || ''
         }
       }).filter(post => {
+        if (!post) return false
         // Debug: Log what we're extracting for each post
         console.log('Post extraction debug:', {
           timestamp: post.timestamp,
@@ -882,8 +887,8 @@ Object.assign(RedditDOMHelper, {
           score: post.score
         })
         
-        // Filter out invalid posts - must have valid postId, postUrl, and title
-        return post.timestamp && post.postId && post.postUrl && post.title
+        // Filter out invalid posts - postUrl and title are required; postId is best-effort
+        return post.timestamp && post.postUrl && post.title
       })
 
       // Sort by timestamp (newest first)
@@ -927,6 +932,7 @@ Object.assign(RedditDOMHelper, {
     
     // Extract ID from Reddit URL patterns
     const patterns = [
+      /^t3_([a-z0-9]+)$/i,
       /\/comments\/([a-z0-9]+)/i,
       /\/r\/[^\/]+\/comments\/([a-z0-9]+)/i,
       /id=([a-z0-9]+)/i

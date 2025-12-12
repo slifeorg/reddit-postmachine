@@ -7,8 +7,8 @@ The Quasar browser extension has been successfully built and is ready for use!
 ## 📁 Built Extension Location
 
 The extension has been built to:
-- **Directory**: `/dist/bex/`
-- **Packaged ZIP**: `/dist/bex/Packaged.reddit-postmachine-quasar.zip`
+- **Directory**: `/lumi/dist/bex/`
+- **Packaged ZIP**: `/lumi/dist/bex/Packaged.reddit-postmachine-quasar.zip`
 
 ## 🔧 Solution Implemented
 
@@ -49,7 +49,7 @@ extendViteConf (viteConf) {
 1. Open Chrome and navigate to `chrome://extensions/`
 2. Enable "Developer mode" (top right toggle)
 3. Click "Load unpacked"
-4. Select the `/dist/bex/` directory
+4. Select the `/lumi/dist/bex/` directory
 
 **OR**
 
@@ -95,6 +95,7 @@ extendViteConf (viteConf) {
 
 ```bash
 # Development mode
+cd lumi
 npm run dev:bex
 
 # Production build

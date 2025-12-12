@@ -51,7 +51,8 @@ repos:
     hooks:
       - id: eslint
         types_or: [javascript]
-        args: ['--quiet']
+        entry: bash -c 'cd lumi && eslint --quiet --ext .js,.vue .'
+        args: []
         # Ignore any files that might contain jinja / bundles
         exclude: |
             (?x)^(

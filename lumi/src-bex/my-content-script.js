@@ -165,6 +165,11 @@ function initializeRedditIntegration() {
   // Listen for messages from background script
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log('Content script received message:', message)
+
+    if (message.type === 'PING') {
+      sendResponse({ pong: true, url: window.location.href })
+      return true
+    }
     
     // For START_POST_CREATION, use more specific deduplication to avoid blocking valid retries
     if (message.type === 'START_POST_CREATION') {

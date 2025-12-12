@@ -1,6 +1,27 @@
 // Submit Content Script - Handles post submission functionality
 // Only runs on submit pages: *://reddit.com/*/submit*
 
+function injectBeforeUnloadBlocker() {
+  try {
+    const script = document.createElement('script')
+    script.textContent = `(() => {
+      try {
+        const originalAdd = window.addEventListener
+        window.addEventListener = function(type, listener, options) {
+          if (type === 'beforeunload') return
+          return originalAdd.call(this, type, listener, options)
+        }
+        window.onbeforeunload = null
+      } catch (e) {}
+    })();`
+    ;(document.documentElement || document.head || document.body).appendChild(script)
+    script.remove()
+  } catch (e) {
+  }
+}
+
+injectBeforeUnloadBlocker()
+
 // Remove beforeunload listeners to prevent "Leave site?" dialog
 function removeBeforeUnloadListeners() {
   console.log('Removing Reddit\'s beforeunload event listeners to prevent "Leave site?" dialog')
@@ -8,12 +29,11 @@ function removeBeforeUnloadListeners() {
   // Remove window onbeforeunload handler
   window.onbeforeunload = null
   
-  // Add our own passive beforeunload listener that prevents the dialog
+  // Intercept beforeunload in capture phase and stop any handlers from running.
+  // Do not call preventDefault / set returnValue here, since that can itself trigger the prompt.
   window.addEventListener('beforeunload', (e) => {
-    // Prevent the default behavior and don't show any dialog
-    e.preventDefault()
-    e.returnValue = null
-    return null
+    if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation()
+    if (typeof e.stopPropagation === 'function') e.stopPropagation()
   }, true)
   
   console.log('Beforeunload listeners disabled successfully')
@@ -912,15 +932,6 @@ async function runPostSubmissionScript(skipTabStateCheck = false) {
         action: 'POST_CREATION_COMPLETED',
         success: true
       }).catch(() => {})
-      
-      // Close tab
-      console.log('Closing tab after successful submission')
-      chrome.runtime.sendMessage({
-        type: 'CLOSE_CURRENT_TAB'
-      }).catch(() => {
-        // Fallback: try to close window
-        window.close()
-      })
     } else {
       console.log('Post submission failed')
       // Notify background script of failure

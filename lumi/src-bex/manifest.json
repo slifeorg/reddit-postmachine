@@ -27,12 +27,8 @@
       "exclude_matches": [
         "*://www.reddit.com/*/submit", 
         "*://www.reddit.com/*/submit/*", 
-        "*://www.reddit.com/*/submitted", 
-        "*://www.reddit.com/*/submitted/*",
         "*://old.reddit.com/*/submit", 
-        "*://old.reddit.com/*/submit/*",
-        "*://old.reddit.com/*/submitted",
-        "*://old.reddit.com/*/submitted/*"
+        "*://old.reddit.com/*/submit/*"
       ],
       "js": ["my-content-script.js", "stats-content-script.js"],
       "run_at": "document_idle"
@@ -40,7 +36,7 @@
     {
       "matches": ["*://www.reddit.com/*/submit", "*://www.reddit.com/*/submit/*", "*://old.reddit.com/*/submit", "*://old.reddit.com/*/submit/*"],
       "js": ["submit-content-script.js"],
-      "run_at": "document_idle"
+      "run_at": "document_start"
     }
   ],
   
