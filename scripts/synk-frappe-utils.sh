@@ -44,7 +44,7 @@ CONTAINER_NAME="reddit-postmachine-backend-1"  # Using container name
 CONTAINER_BASE_PATH="/home/frappe/frappe-bench/apps/reddit_postmachine"
 LOCAL_POSTMACHINE_DIR="${LOCAL_POSTMACHINE_DIR:-..}"  # Use argument or default to ".."
 MINUTES_BACK="${MINUTES_BACK:-30}"  # Use argument or default to 30 minutes
-SITE_NAME="dev.slife.guru"  # Your site name
+SITE_NAME="32016-51127.bacloud.info"  # Your site name
 
 # Colors for output
 RED='\033[0;31m'
@@ -272,7 +272,6 @@ HAS_REQUIREMENTS_CHANGES=false
 HAS_HOOKS_CHANGES=false
 HAS_TEMPLATE_CHANGES=false
 HAS_CONFIG_CHANGES=false
-HAS_FIXTURES_CHANGES=false
 
 while IFS= read -r file; do
     relative_path=$(get_relative_path "$file")
@@ -304,10 +303,6 @@ while IFS= read -r file; do
     if [[ "$relative_path" == *"config/"* || "$relative_path" == *"common_site_config.json" ]]; then
         HAS_CONFIG_CHANGES=true
     fi
-    
-    if [[ "$relative_path" == *"fixtures/"* && "$relative_path" == *.json ]]; then
-        HAS_FIXTURES_CHANGES=true
-    fi
 done <<< "$MODIFIED_FILES"
 
 echo -e "${GREEN}📝 Found $(echo "$MODIFIED_FILES" | wc -l) syncable modified files${NC}"
@@ -335,9 +330,6 @@ if [ "$HAS_CONFIG_CHANGES" = true ]; then
 fi
 if [ "$HAS_REQUIREMENTS_CHANGES" = true ]; then
     echo -e "  • ${RED}📦 Dependency changes (requires container rebuild)${NC}"
-fi
-if [ "$HAS_FIXTURES_CHANGES" = true ]; then
-    echo -e "  • ${CYAN}📦 Fixtures changes (JSON files in fixtures/)${NC}"
 fi
 
 # Warn about special cases
@@ -397,59 +389,20 @@ while IFS= read -r file; do
         echo -e "${CYAN}[$CURRENT_FILE/$TOTAL_FILES] 📤 Syncing: $RELATIVE_PATH${NC}"
 
         # Create directory structure in container
-        DIR_CREATE_OUTPUT=$(ssh "$REMOTE_SERVER" "docker exec '$CONTAINER_NAME' mkdir -p '$CONTAINER_DIR_PATH'" 2>&1)
-        DIR_CREATE_EXIT_CODE=$?
-        if [ $DIR_CREATE_EXIT_CODE -ne 0 ]; then
+        ssh "$REMOTE_SERVER" "docker exec '$CONTAINER_NAME' mkdir -p '$CONTAINER_DIR_PATH'" 2>/dev/null
+        if [ $? -ne 0 ]; then
             echo -e "${RED}  ❌ Failed to create directory structure for $RELATIVE_PATH${NC}"
-            echo -e "${YELLOW}  Error: $DIR_CREATE_OUTPUT${NC}"
             FAILED_FILES+=("$RELATIVE_PATH (directory creation failed)")
             ((SYNC_ERROR_COUNT++))
             continue
         fi
 
-        # Copy file to container using docker cp (more reliable method)
-        # First, copy file to remote server temporarily
-        TEMP_FILE="/tmp/sync_$(basename "$file")_$$"
-        SYNC_SUCCESS=false
-        
-        # Method 1: Try using docker cp (copy to host first, then into container)
-        if scp "$file" "$REMOTE_SERVER:$TEMP_FILE" >/dev/null 2>&1; then
-            # Copy from host to container
-            COPY_OUTPUT=$(ssh "$REMOTE_SERVER" "docker cp '$TEMP_FILE' '$CONTAINER_NAME:$CONTAINER_FILE_PATH'" 2>&1)
-            COPY_EXIT_CODE=$?
-            if [ $COPY_EXIT_CODE -eq 0 ]; then
-                # Set proper permissions
-                ssh "$REMOTE_SERVER" "docker exec '$CONTAINER_NAME' chmod 644 '$CONTAINER_FILE_PATH'" >/dev/null 2>&1
-                SYNC_SUCCESS=true
-            else
-                echo -e "${YELLOW}  Warning: docker cp failed, trying alternative method...${NC}"
-                echo -e "${YELLOW}  Error: $COPY_OUTPUT${NC}"
-            fi
-            # Clean up temp file
-            ssh "$REMOTE_SERVER" "rm -f '$TEMP_FILE'" >/dev/null 2>&1
-        fi
-        
-        # Method 2: Fallback to pipe method if docker cp failed
-        if [ "$SYNC_SUCCESS" = false ]; then
-            # Escape the file path properly for shell
-            ESCAPED_PATH=$(printf '%s\n' "$CONTAINER_FILE_PATH" | sed "s/'/'\\\\''/g")
-            PIPE_OUTPUT=$(cat "$file" | ssh "$REMOTE_SERVER" "docker exec -i '$CONTAINER_NAME' sh -c 'cat > '\''$ESCAPED_PATH'\'''" 2>&1)
-            PIPE_EXIT_CODE=$?
-            if [ $PIPE_EXIT_CODE -eq 0 ]; then
-                # Set proper permissions
-                ssh "$REMOTE_SERVER" "docker exec '$CONTAINER_NAME' chmod 644 '$CONTAINER_FILE_PATH'" >/dev/null 2>&1
-                SYNC_SUCCESS=true
-            else
-                echo -e "${YELLOW}  Error details: $PIPE_OUTPUT${NC}"
-            fi
-        fi
-        
-        if [ "$SYNC_SUCCESS" = true ]; then
+        # Copy file to container using SSH and docker cp
+        if cat "$file" | ssh "$REMOTE_SERVER" "docker exec -i '$CONTAINER_NAME' sh -c 'cat > \"$CONTAINER_FILE_PATH\"'" 2>/dev/null; then
             echo -e "${GREEN}  ✅ Successfully synced${NC}"
             ((SYNCED_COUNT++))
         else
             echo -e "${RED}  ❌ Failed to sync $RELATIVE_PATH${NC}"
-            echo -e "${YELLOW}  Tried both docker cp and pipe methods${NC}"
             FAILED_FILES+=("$RELATIVE_PATH")
             ((SYNC_ERROR_COUNT++))
         fi
@@ -506,28 +459,9 @@ if [ "$HAS_JS_CSS_CHANGES" = true ]; then
     fi
 fi
 
-# 3. Import fixtures if fixtures files were modified
-if [ "$HAS_FIXTURES_CHANGES" = true ]; then
-    echo -e "${BLUE}3. Importing fixtures...${NC}"
-    # Import each fixture file that was modified
-    while IFS= read -r file; do
-        if [[ "$file" == *"fixtures/"* && "$file" == *.json ]]; then
-            RELATIVE_PATH=$(get_relative_path "$file")
-            CONTAINER_FILE_PATH="$CONTAINER_BASE_PATH/$RELATIVE_PATH"
-            FIXTURE_NAME=$(basename "$RELATIVE_PATH")
-            echo -e "${CYAN}   Importing: $FIXTURE_NAME${NC}"
-            if ssh "$REMOTE_SERVER" "docker exec '$CONTAINER_NAME' bench --site '$SITE_NAME' import-doc '$CONTAINER_FILE_PATH'" 2>/dev/null; then
-                echo -e "${GREEN}   ✅ Imported $FIXTURE_NAME${NC}"
-            else
-                echo -e "${YELLOW}   ⚠️  Could not import $FIXTURE_NAME${NC}"
-            fi
-        fi
-    done <<< "$MODIFIED_FILES"
-fi
-
-# 4. Run migrations if needed
+# 3. Run migrations if needed
 if [ "$RUN_MIGRATE" = true ]; then
-    echo -e "${BLUE}4. Running migrations...${NC}"
+    echo -e "${BLUE}3. Running migrations...${NC}"
     if ssh "$REMOTE_SERVER" "docker exec '$CONTAINER_NAME' bench --site '$SITE_NAME' migrate" 2>/dev/null; then
         echo -e "${GREEN}   ✅ Migrations completed${NC}"
     else
@@ -535,9 +469,9 @@ if [ "$RUN_MIGRATE" = true ]; then
     fi
 fi
 
-# 5. Restart bench services (always do this for Python/template changes)
+# 4. Restart bench services (always do this for Python/template changes)
 if [ "$HAS_PYTHON_CHANGES" = true ] || [ "$HAS_TEMPLATE_CHANGES" = true ] || [ "$HAS_HOOKS_CHANGES" = true ]; then
-    echo -e "${BLUE}5. Restarting bench services...${NC}"
+    echo -e "${BLUE}4. Restarting bench services...${NC}"
     if ssh "$REMOTE_SERVER" "docker exec '$CONTAINER_NAME' bench restart" 2>/dev/null; then
         echo -e "${GREEN}   ✅ Bench services restarted${NC}"
         sleep 2  # Give services time to start
@@ -546,8 +480,8 @@ if [ "$HAS_PYTHON_CHANGES" = true ] || [ "$HAS_TEMPLATE_CHANGES" = true ] || [ "
     fi
 fi
 
-# 6. Warm up the site
-echo -e "${BLUE}6. Warming up site...${NC}"
+# 5. Warm up the site
+echo -e "${BLUE}5. Warming up site...${NC}"
 if ssh "$REMOTE_SERVER" "docker exec '$CONTAINER_NAME' bench --site '$SITE_NAME' warm-up-site" 2>/dev/null; then
     echo -e "${GREEN}   ✅ Site warmed up${NC}"
 else
