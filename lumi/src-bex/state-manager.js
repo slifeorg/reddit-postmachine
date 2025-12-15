@@ -1,4 +1,4 @@
-/**
+import { stateLogger } from "./logger.js";/**
  * State Manager Module
  * Handles automation state persistence, recovery, and tab state tracking
  */
@@ -89,7 +89,7 @@ export class AutoFlowStateManager {
 
       // Prevent infinite loops by limiting retry attempts
       if (attemptCount > 5) {
-        console.log(
+        stateLogger.log(
           `[AutoFlowStateManager] ⚠️ Too many retry attempts (${attemptCount}) for step ${step}, clearing state for user ${data.userName}`
         )
         await this.clearState(data.userName)
@@ -97,7 +97,7 @@ export class AutoFlowStateManager {
       }
     } else if (currentState) {
       // New step - reset attempt count to 1
-      console.log(
+      stateLogger.log(
         `[AutoFlowStateManager] 🔄 Progressing from ${currentState.currentStep} to ${step}, resetting attempt count`
       )
     }
@@ -118,12 +118,12 @@ export class AutoFlowStateManager {
 
     try {
       await chrome.storage.local.set({ [stateKey]: state })
-      console.log(
+      stateLogger.log(
         `[AutoFlowStateManager] 💾 State saved: ${step} for user ${data.userName} (attempt ${attemptCount})`,
         state
       )
     } catch (error) {
-      console.error('[AutoFlowStateManager] Failed to save state:', error)
+      stateLogger.error('[AutoFlowStateManager] Failed to save state:', error)
     }
   }
 
@@ -134,7 +134,7 @@ export class AutoFlowStateManager {
       const result = await chrome.storage.local.get([stateKey])
       return result[stateKey] || null
     } catch (error) {
-      console.error('[AutoFlowStateManager] Failed to get state:', error)
+      stateLogger.error('[AutoFlowStateManager] Failed to get state:', error)
       return null
     }
   }
@@ -144,9 +144,9 @@ export class AutoFlowStateManager {
       if (!userName) return
       const stateKey = this.getStateKey(userName)
       await chrome.storage.local.remove([stateKey])
-      console.log(`[AutoFlowStateManager] 🗑️ State cleared for user ${userName}`)
+      stateLogger.log(`[AutoFlowStateManager] 🗑️ State cleared for user ${userName}`)
     } catch (error) {
-      console.error('[AutoFlowStateManager] Failed to clear state:', error)
+      stateLogger.error('[AutoFlowStateManager] Failed to clear state:', error)
     }
   }
 
@@ -158,17 +158,17 @@ export class AutoFlowStateManager {
   static async recoverState(userName) {
     const state = await this.getState(userName)
     if (!state) {
-      console.log(`[AutoFlowStateManager] No previous state found for user ${userName}`)
+      stateLogger.log(`[AutoFlowStateManager] No previous state found for user ${userName}`)
       return null
     }
 
     if (await this.isStateStale(state)) {
-      console.log(`[AutoFlowStateManager] Previous state is stale for user ${userName}, clearing it`)
+      stateLogger.log(`[AutoFlowStateManager] Previous state is stale for user ${userName}, clearing it`)
       await this.clearState(userName)
       return null
     }
 
-    console.log(`[AutoFlowStateManager] 🔄 Recovering previous state for user ${userName}:`, state)
+    stateLogger.log(`[AutoFlowStateManager] 🔄 Recovering previous state for user ${userName}:`, state)
     return state
   }
 
@@ -177,7 +177,7 @@ export class AutoFlowStateManager {
       const tab = await chrome.tabs.get(tabId)
       return tab && !tab.discarded
     } catch (error) {
-      console.log(`[AutoFlowStateManager] Tab ${tabId} is no longer valid:`, error.message)
+      stateLogger.log(`[AutoFlowStateManager] Tab ${tabId} is no longer valid:`, error.message)
       return false
     }
   }

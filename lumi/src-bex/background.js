@@ -1,4 +1,4 @@
-/**
+import { bgLogger } from "./logger.js";/**
  * Background script for Reddit Post Machine
  * Entry point that imports modular components
  */
@@ -33,8 +33,14 @@ import {
   handleGetTabState,
   handleReuseRedditTab,
   resumeAutoFlow,
-  handleCheckUserStatus
+  handleCheckUserStatus,
+  handleOpenExtension
 } from './message-handlers.js'
+
+import {
+  openOrFocusExtensionTab,
+  handleTabClosed
+} from './extension-tab-manager.js'
 
 import {
   AutoFlowStateManager,
@@ -59,7 +65,7 @@ async function restartAutoFlowFromBeginning(userName) {
 // Handle messages from content scripts and popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const senderTabId = sender.tab ? sender.tab.id : null
-  console.log('Background received message:', message.type, senderTabId ? `from tab ${senderTabId}` : 'from popup')
+  bgLogger.log('Background received message:', message.type, senderTabId ? `from tab ${senderTabId}` : 'from popup')
 
   switch (message.type) {
     case 'GET_REDDIT_INFO':
@@ -101,7 +107,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     case 'URL_CHANGED':
       if (senderTabId) {
-        console.log(`URL Changed in tab ${senderTabId}: ${message.url}`)
+        bgLogger.log(`URL Changed in tab ${senderTabId}: ${message.url}`)
         const state = tabStates[senderTabId]
         if (state) {
           checkAndAdvanceState(senderTabId, state, message.url)
@@ -151,8 +157,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       resumeAutoFlow(message.state, sendResponse)
       return true
 
+    case 'OPEN_EXTENSION':
+      handleOpenExtension(sendResponse)
+      return true
+
     default:
-      console.log('Unknown message type:', message.type)
+      bgLogger.log('Unknown message type:', message.type)
       sendResponse({ error: 'Unknown message type' })
   }
 })
@@ -172,11 +182,13 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   delete tabStates[tabId]
   processedTabs.delete(tabId)
+  // Handle extension tab closure
+  handleTabClosed(tabId).catch(() => {})
 })
 
 // Export default function for Quasar bridge compatibility
 export default bexBackground((bridge) => {
-  console.log('Background script bridge initialized', bridge)
+  bgLogger.log('Background script bridge initialized', bridge)
 
   chrome.storage.local.remove(['autoFlowState_unknown']).catch(() => {})
 

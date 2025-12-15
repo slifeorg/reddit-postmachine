@@ -1,4 +1,4 @@
-// Submit Content Script - Handles post submission functionality
+import { submitLogger } from "./logger.js";// Submit Content Script - Handles post submission functionality
 // Only runs on submit pages: *://reddit.com/*/submit*
 
 function injectBeforeUnloadBlocker() {
@@ -24,7 +24,7 @@ injectBeforeUnloadBlocker()
 
 // Remove beforeunload listeners to prevent "Leave site?" dialog
 function removeBeforeUnloadListeners() {
-  console.log('Removing Reddit\'s beforeunload event listeners to prevent "Leave site?" dialog')
+  submitLogger.log('Removing Reddit\'s beforeunload event listeners to prevent "Leave site?" dialog')
   
   // Remove window onbeforeunload handler
   window.onbeforeunload = null
@@ -36,7 +36,7 @@ function removeBeforeUnloadListeners() {
     if (typeof e.stopPropagation === 'function') e.stopPropagation()
   }, true)
   
-  console.log('Beforeunload listeners disabled successfully')
+  submitLogger.log('Beforeunload listeners disabled successfully')
 }
 
 // Shared utility functions
@@ -62,7 +62,7 @@ async function getStoredUsername() {
     const result = await chrome.storage.sync.get(['redditUser'])
     return result.redditUser || null
   } catch (error) {
-    console.warn('Failed to get stored username:', error)
+    submitLogger.warn('Failed to get stored username:', error)
     return null
   }
 }
@@ -73,7 +73,7 @@ async function fetchPostDataForSubmission() {
     const storedData = sessionStorage.getItem('reddit-post-machine-postdata')
     if (storedData) {
       const postData = JSON.parse(storedData)
-      console.log('Using stored post data for submission:', postData)
+      submitLogger.log('Using stored post data for submission:', postData)
       return postData
     }
     
@@ -81,7 +81,7 @@ async function fetchPostDataForSubmission() {
     // This should not happen in normal flow since background script provides the data
     throw new Error('No post data found - script may be running incorrectly')
   } catch (error) {
-    console.error('Failed to fetch post data:', error)
+    submitLogger.error('Failed to fetch post data:', error)
     throw error
   }
 }
@@ -90,7 +90,7 @@ async function fetchPostDataForSubmission() {
 
 // Submit page functions
 async function ensureSubmitPageReady() {
-  console.log('Ensuring submit page is ready...')
+  submitLogger.log('Ensuring submit page is ready...')
   
   // Wait for key elements to be available
   let attempts = 0
@@ -99,21 +99,21 @@ async function ensureSubmitPageReady() {
   while (attempts < maxAttempts) {
     const submitForm = qs('form') || qs('[data-testid*="post"]') || qs('shreddit-post-composer')
     if (submitForm) {
-      console.log('Submit page is ready')
+      submitLogger.log('Submit page is ready')
       return true
     }
     
-    console.log(`Waiting for submit page... attempt ${attempts + 1}/${maxAttempts}`)
+    submitLogger.log(`Waiting for submit page... attempt ${attempts + 1}/${maxAttempts}`)
     await sleep(1000)
     attempts++
   }
   
-  console.log('Submit page failed to load within timeout')
+  submitLogger.log('Submit page failed to load within timeout')
   return false
 }
 
 async function fillTitle(postData) {
-  console.log('Filling title field...')
+  submitLogger.log('Filling title field...')
   
   // Helper function for shadow DOM queries
   function deepQuery(selector, root = document) {
@@ -141,22 +141,22 @@ async function fillTitle(postData) {
           titleInput.value = postData.title
           titleInput.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }))
           titleInput.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }))
-          console.log('Title field filled:', postData.title)
+          submitLogger.log('Title field filled:', postData.title)
           await sleep(1500)
           return true
         }
       }
     }
-    console.log('Failed to fill title')
+    submitLogger.log('Failed to fill title')
     return false
   } catch (error) {
-    console.error('Error filling title:', error)
+    submitLogger.error('Error filling title:', error)
     return false
   }
 }
 
 async function fillUrl(postData) {
-  console.log('Filling URL field...')
+  submitLogger.log('Filling URL field...')
   
   // Remove beforeunload listeners before modifying form
   if (typeof removeBeforeUnloadListeners === 'function') {
@@ -178,40 +178,40 @@ async function fillUrl(postData) {
   
   try {
     // Fill URL field using shadow DOM (from postm-page.js)
-    console.log('URL fill attempt - postData.url:', postData?.url)
+    submitLogger.log('URL fill attempt - postData.url:', postData?.url)
     if (postData.url && postData.url.trim()) {
-      console.log('Looking for URL input element...')
+      submitLogger.log('Looking for URL input element...')
       const urlInputElement = deepQuery('faceplate-textarea-input[name="link"]')
-      console.log('URL input element found:', !!urlInputElement)
+      submitLogger.log('URL input element found:', !!urlInputElement)
       if (urlInputElement) {
         const shadowRoot = urlInputElement.shadowRoot
-        console.log('ShadowRoot accessible:', !!shadowRoot)
+        submitLogger.log('ShadowRoot accessible:', !!shadowRoot)
         if (shadowRoot) {
           const urlInput = shadowRoot.querySelector('#innerTextArea')
-          console.log('Inner textarea found:', !!urlInput)
+          submitLogger.log('Inner textarea found:', !!urlInput)
           if (urlInput) {
             urlInput.focus()
             await sleep(500)
             urlInput.value = postData.url
             urlInput.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }))
             urlInput.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }))
-            console.log('URL field filled:', postData.url)
+            submitLogger.log('URL field filled:', postData.url)
             await sleep(1500)
             return true
           }
         }
       }
     }
-    console.log('Failed to fill URL or no URL provided')
+    submitLogger.log('Failed to fill URL or no URL provided')
     return false
   } catch (error) {
-    console.error('Error filling URL:', error)
+    submitLogger.error('Error filling URL:', error)
     return false
   }
 }
 
 async function fillBody(postData) {
-  console.log('Filling body text...')
+  submitLogger.log('Filling body text...')
   
   // Helper function for shadow DOM queries
   function deepQuery(selector, root = document) {
@@ -229,7 +229,7 @@ async function fillBody(postData) {
   try {
     // Fill body field using multiple possible selectors
     if (postData.body) {
-      console.log('Looking for body text field with updated selectors...')
+      submitLogger.log('Looking for body text field with updated selectors...')
       
       // Helper function to filter out title field
       function isTitleField(element) {
@@ -272,7 +272,7 @@ async function fillBody(postData) {
             for (const candidate of candidates) {
               if (candidate && !isTitleField(candidate)) {
                 bodyEditable = candidate
-                console.log(`Found body field with selector: ${selector}`)
+                submitLogger.log(`Found body field with selector: ${selector}`)
                 break
               }
             }
@@ -293,7 +293,7 @@ async function fillBody(postData) {
           for (const candidate of candidates) {
             if (candidate && !isTitleField(candidate)) {
               bodyEditable = candidate
-              console.log('Found body field in submit form')
+              submitLogger.log('Found body field in submit form')
               break
             }
           }
@@ -302,7 +302,7 @@ async function fillBody(postData) {
       
       // If still not found, try polling for a few seconds
       if (!bodyEditable) {
-        console.log('Body field not immediately available, polling for up to 5 seconds...')
+        submitLogger.log('Body field not immediately available, polling for up to 5 seconds...')
         const maxPollAttempts = 10
         const pollInterval = 500
         
@@ -326,7 +326,7 @@ async function fillBody(postData) {
               for (const candidate of candidates) {
                 if (candidate && !isTitleField(candidate)) {
                   bodyEditable = candidate
-                  console.log(`Found body field after polling (attempt ${attempt + 1})`)
+                  submitLogger.log(`Found body field after polling (attempt ${attempt + 1})`)
                   break
                 }
               }
@@ -338,7 +338,7 @@ async function fillBody(postData) {
       }
       
       if (bodyEditable) {
-        console.log('Found body text editor, setting text...')
+        submitLogger.log('Found body text editor, setting text...')
         bodyEditable.focus()
         await sleep(500)
         
@@ -375,28 +375,28 @@ async function fillBody(postData) {
         }
         
         bodyEditable.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }))
-        console.log('Body text set successfully')
+        submitLogger.log('Body text set successfully')
         await sleep(1500)
         return true
       } else {
-        console.log('Body text field not found with any selector')
+        submitLogger.log('Body text field not found with any selector')
         // Debug: log available elements
-        console.log('Available elements in document:')
-        console.log('Forms:', document.querySelectorAll('form').length)
-        console.log('Contenteditable divs:', document.querySelectorAll('[contenteditable="true"]').length)
-        console.log('Shreddit composers:', document.querySelectorAll('shreddit-composer').length)
+        submitLogger.log('Available elements in document:')
+        submitLogger.log('Forms:', document.querySelectorAll('form').length)
+        submitLogger.log('Contenteditable divs:', document.querySelectorAll('[contenteditable="true"]').length)
+        submitLogger.log('Shreddit composers:', document.querySelectorAll('shreddit-composer').length)
       }
     }
-    console.log('Failed to fill body or no body text provided')
+    submitLogger.log('Failed to fill body or no body text provided')
     return false
   } catch (error) {
-    console.error('Error filling body:', error)
+    submitLogger.error('Error filling body:', error)
     return false
   }
 }
 
 async function clickBodyField() {
-  console.log('Clicking body text field to activate Post button...')
+  submitLogger.log('Clicking body text field to activate Post button...')
 
   // Helper function for shadow DOM queries
   function deepQuery(selector, root = document) {
@@ -452,7 +452,7 @@ async function clickBodyField() {
           for (const candidate of candidates) {
             if (candidate && !isTitleField(candidate)) {
               bodyEditable = candidate
-              console.log(`Found body field with selector: ${selector}`)
+              submitLogger.log(`Found body field with selector: ${selector}`)
               break
             }
           }
@@ -473,7 +473,7 @@ async function clickBodyField() {
         for (const candidate of candidates) {
           if (candidate && !isTitleField(candidate)) {
             bodyEditable = candidate
-            console.log('Found body field in submit form')
+            submitLogger.log('Found body field in submit form')
             break
           }
         }
@@ -482,7 +482,7 @@ async function clickBodyField() {
     
     // If still not found, try polling for a few seconds
     if (!bodyEditable) {
-      console.log('Body field not immediately available, polling for up to 5 seconds...')
+      submitLogger.log('Body field not immediately available, polling for up to 5 seconds...')
       const maxPollAttempts = 10
       const pollInterval = 500
       
@@ -506,7 +506,7 @@ async function clickBodyField() {
             for (const candidate of candidates) {
               if (candidate && !isTitleField(candidate)) {
                 bodyEditable = candidate
-                console.log(`Found body field after polling (attempt ${attempt + 1})`)
+                submitLogger.log(`Found body field after polling (attempt ${attempt + 1})`)
                 break
               }
             }
@@ -518,7 +518,7 @@ async function clickBodyField() {
     }
 
     if (bodyEditable) {
-      console.log('Found body text field, clicking to activate Post button...')
+      submitLogger.log('Found body text field, clicking to activate Post button...')
 
       bodyEditable.click()
       await sleep(100)
@@ -532,24 +532,24 @@ async function clickBodyField() {
       await sleep(1000)
       return true
     } else {
-      console.log('Body text field not found with any selector')
+      submitLogger.log('Body text field not found with any selector')
       // Debug: log available elements
-      console.log('Available elements in document:')
-      console.log('Forms:', document.querySelectorAll('form').length)
-      console.log('Contenteditable divs:', document.querySelectorAll('[contenteditable="true"]').length)
-      console.log('Shreddit composers:', document.querySelectorAll('shreddit-composer').length)
+      submitLogger.log('Available elements in document:')
+      submitLogger.log('Forms:', document.querySelectorAll('form').length)
+      submitLogger.log('Contenteditable divs:', document.querySelectorAll('[contenteditable="true"]').length)
+      submitLogger.log('Shreddit composers:', document.querySelectorAll('shreddit-composer').length)
     }
 
-    console.log('Body text field not found')
+    submitLogger.log('Body text field not found')
     return false
   } catch (error) {
-    console.error('Error clicking body field:', error)
+    submitLogger.error('Error clicking body field:', error)
     return false
   }
 }
 
 async function clickTab(tabValue) {
-  console.log(`Clicking tab with data-select-value="${tabValue}"`)
+  submitLogger.log(`Clicking tab with data-select-value="${tabValue}"`)
   
   // Helper function for shadow DOM queries
   function deepQuery(selector, root = document) {
@@ -570,12 +570,12 @@ async function clickTab(tabValue) {
     await sleep(2000)
     return true
   }
-  console.log(`Tab with data-select-value="${tabValue}" not found`)
+  submitLogger.log(`Tab with data-select-value="${tabValue}" not found`)
   return false
 }
 
 async function handleRuleViolationDialog() {
-  console.log('Checking for rule violation dialog after submit...')
+  submitLogger.log('Checking for rule violation dialog after submit...')
   
   // Helper function for shadow DOM queries
   function deepQuery(selector, root = document) {
@@ -637,11 +637,11 @@ async function handleRuleViolationDialog() {
       )
       
       if (!isRuleViolationDialog) {
-        console.log('Dialog found but not a rule violation dialog')
+        submitLogger.log('Dialog found but not a rule violation dialog')
         continue // Keep looking for the right dialog
       }
       
-      console.log('Rule violation dialog detected, looking for "Submit without editing" button...')
+      submitLogger.log('Rule violation dialog detected, looking for "Submit without editing" button...')
       
       // Look for "Submit without editing" button with comprehensive search
       let submitButton = null
@@ -688,7 +688,7 @@ async function handleRuleViolationDialog() {
       }
       
       if (submitButton) {
-        console.log('Found "Submit without editing" button, clicking...')
+        submitLogger.log('Found "Submit without editing" button, clicking...')
         submitButton.click()
         
         // Wait for dialog to close and verify submission completion
@@ -699,45 +699,45 @@ async function handleRuleViolationDialog() {
         const stillOnSubmitPage = window.location.href.includes('/submit')
         
         if (!dialogStillExists && !stillOnSubmitPage) {
-          console.log('Rule violation dialog handled successfully - submission completed')
+          submitLogger.log('Rule violation dialog handled successfully - submission completed')
           return true // Success
         } else if (dialogStillExists) {
-          console.log('Dialog still exists after clicking, may need to try again')
+          submitLogger.log('Dialog still exists after clicking, may need to try again')
           continue // Continue polling to try again
         } else {
-          console.log('Dialog closed but still on submit page, checking submission status...')
+          submitLogger.log('Dialog closed but still on submit page, checking submission status...')
           // Give it a bit more time to navigate
           await sleep(3000)
           if (!window.location.href.includes('/submit')) {
-            console.log('Rule violation dialog handled successfully - submission completed')
+            submitLogger.log('Rule violation dialog handled successfully - submission completed')
             return true
           } else {
-            console.log('Still on submit page after dialog handling, may have failed')
+            submitLogger.log('Still on submit page after dialog handling, may have failed')
             continue // Continue to see if dialog reappears
           }
         }
       } else {
-        console.log('Could not find "Submit without editing" button in dialog, continuing to poll...')
+        submitLogger.log('Could not find "Submit without editing" button in dialog, continuing to poll...')
         // Don't return false immediately - continue polling as button might appear later
         continue
       }
     }
     
     if (dialogFound) {
-      console.log('Rule violation dialog was found but could not be handled within timeout period')
+      submitLogger.log('Rule violation dialog was found but could not be handled within timeout period')
     } else {
-      console.log('No rule violation dialog found within timeout period')
+      submitLogger.log('No rule violation dialog found within timeout period')
     }
     return false // No dialog appeared or couldn't be handled
     
   } catch (error) {
-    console.error('Error handling rule violation dialog:', error)
+    submitLogger.error('Error handling rule violation dialog:', error)
     return false
   }
 }
 
 async function submitPost() {
-  console.log('Submitting post...')
+  submitLogger.log('Submitting post...')
   
   // Helper function for shadow DOM queries
   function deepQuery(selector, root = document) {
@@ -758,7 +758,7 @@ async function submitPost() {
       const innerButton = deepQuery('#inner-post-submit-button')
       if (innerButton) {
         const isDisabled = innerButton.disabled || innerButton.getAttribute('aria-disabled') === 'true'
-        console.log('Inner post button active:', !isDisabled)
+        submitLogger.log('Inner post button active:', !isDisabled)
         return !isDisabled
       }
 
@@ -767,7 +767,7 @@ async function submitPost() {
         const shadowButton = postContainer.shadowRoot.querySelector('button')
         if (shadowButton) {
           const isShadowDisabled = shadowButton.disabled || shadowButton.getAttribute('aria-disabled') === 'true'
-          console.log('Shadow post button active:', !isShadowDisabled)
+          submitLogger.log('Shadow post button active:', !isShadowDisabled)
           return !isShadowDisabled
         }
       }
@@ -787,7 +787,7 @@ async function submitPost() {
     // Try inner post button first (from postm-page.js)
     const innerPostButton = deepQuery('#inner-post-submit-button')
     if (innerPostButton && !innerPostButton.disabled) {
-      console.log('Found active inner post button, clicking...')
+      submitLogger.log('Found active inner post button, clicking...')
       innerPostButton.click()
       // Check for rule violation dialog after clicking submit
       await handleRuleViolationDialog()
@@ -797,12 +797,12 @@ async function submitPost() {
     // Try shadow DOM button (from postm-page.js)
     const postContainer = deepQuery('r-post-form-submit-button#submit-post-button')
     if (postContainer) {
-      console.log('Found post container')
+      submitLogger.log('Found post container')
 
       if (postContainer.shadowRoot) {
         const shadowButton = postContainer.shadowRoot.querySelector('button')
         if (shadowButton && !shadowButton.disabled) {
-          console.log('Found active button in shadow DOM, clicking...')
+          submitLogger.log('Found active button in shadow DOM, clicking...')
           shadowButton.click()
           // Check for rule violation dialog after clicking submit
           await handleRuleViolationDialog()
@@ -810,7 +810,7 @@ async function submitPost() {
         }
       }
 
-      console.log('Clicking post container directly')
+      submitLogger.log('Clicking post container directly')
       postContainer.click()
       // Check for rule violation dialog after clicking submit
       await handleRuleViolationDialog()
@@ -821,23 +821,23 @@ async function submitPost() {
     const submitButton = qs('button[data-click-id="submit"], button[type="submit"], [data-testid="post-submit"]')
     if (submitButton) {
       submitButton.click()
-      console.log('Submit button clicked')
+      submitLogger.log('Submit button clicked')
       // Check for rule violation dialog after clicking submit
       await handleRuleViolationDialog()
       return true
     } else {
-      console.log('Submit button not found')
+      submitLogger.log('Submit button not found')
       return false
     }
   } catch (error) {
-    console.error('Error submitting post:', error)
+    submitLogger.error('Error submitting post:', error)
     return false
   }
 }
 
 // Main post submission script
 async function runPostSubmissionScript(skipTabStateCheck = false) {
-  console.log('=== POST SUBMISSION SCRIPT STARTED ===')
+  submitLogger.log('=== POST SUBMISSION SCRIPT STARTED ===')
   
   // Remove beforeunload listeners to prevent "Leave site?" dialog
   removeBeforeUnloadListeners()
@@ -850,7 +850,7 @@ async function runPostSubmissionScript(skipTabStateCheck = false) {
       })
       
       if (tabStateResponse.success && tabStateResponse.isBackgroundPostTab) {
-        console.log('Skipping auto-run post submission - this tab was created by background script')
+        submitLogger.log('Skipping auto-run post submission - this tab was created by background script')
         return
       }
     }
@@ -861,53 +861,53 @@ async function runPostSubmissionScript(skipTabStateCheck = false) {
     // Fetch post data
     const postData = await fetchPostDataForSubmission()
     if (!postData) {
-      console.log('Post submission script: No post data available')
+      submitLogger.log('Post submission script: No post data available')
       return
     }
     
-    console.log('Post submission script: Got post data:', postData.title)
+    submitLogger.log('Post submission script: Got post data:', postData.title)
     
     // Determine post type and stay on appropriate tab
     const isLinkPost = postData.url && postData.url.trim()
     const targetTab = isLinkPost ? 'LINK' : 'TEXT'
     
-    console.log(`=== Submitting as ${targetTab} post ===`)
+    submitLogger.log(`=== Submitting as ${targetTab} post ===`)
     
     // === STEP 1: Go to target tab and fill title ===
-    console.log(`=== STEP 1: ${targetTab} TAB - Filling title ===`)
+    submitLogger.log(`=== STEP 1: ${targetTab} TAB - Filling title ===`)
     if (await clickTab(targetTab)) {
       await fillTitle(postData)
     } else {
-      console.log(`Cannot proceed without ${targetTab} tab`)
+      submitLogger.log(`Cannot proceed without ${targetTab} tab`)
       return
     }
 
     // === STEP 2: Fill URL if link post ===
     if (isLinkPost) {
-      console.log('=== STEP 2: Filling URL ===')
+      submitLogger.log('=== STEP 2: Filling URL ===')
       await fillUrl(postData)
     }
 
     // === STEP 3: Activating Post button by clicking body field ===
-    console.log('=== STEP 3: Activating Post button by clicking body field ===')
+    submitLogger.log('=== STEP 3: Activating Post button by clicking body field ===')
     await clickBodyField()
     await sleep(2000)
 
     // === STEP 4: Fill body text ===
-    console.log('=== STEP 4: Fill body text ===')
+    submitLogger.log('=== STEP 4: Fill body text ===')
     await fillBody(postData)
 
     // === STEP 5: Final activation click on body field ===
-    console.log('=== STEP 5: Final activation click on body field ===')
+    submitLogger.log('=== STEP 5: Final activation click on body field ===')
     await clickBodyField()
     await sleep(2000)
 
     // === STEP 6: Clicking Post button ===
-    console.log('=== STEP 6: Clicking Post button ===')
+    submitLogger.log('=== STEP 6: Clicking Post button ===')
     const submitSuccess = await submitPost()
     
     if (submitSuccess) {
-      console.log('Post submitted successfully, waiting 10 seconds...')
+      submitLogger.log('Post submitted successfully, waiting 10 seconds...')
       await sleep(10000)
       
       // Clear post data to prevent reuse
@@ -920,7 +920,7 @@ async function runPostSubmissionScript(skipTabStateCheck = false) {
         success: true
       }).catch(() => {})
     } else {
-      console.log('Post submission failed')
+      submitLogger.log('Post submission failed')
       // Notify background script of failure
       chrome.runtime.sendMessage({
         type: 'ACTION_COMPLETED',
@@ -932,10 +932,10 @@ async function runPostSubmissionScript(skipTabStateCheck = false) {
       sessionStorage.removeItem('reddit-post-machine-postdata')
     }
     
-    console.log('=== POST SUBMISSION SCRIPT COMPLETED ===')
+    submitLogger.log('=== POST SUBMISSION SCRIPT COMPLETED ===')
     
   } catch (error) {
-    console.error('Post submission script error:', error)
+    submitLogger.error('Post submission script error:', error)
     // Notify background script of error
     chrome.runtime.sendMessage({
       type: 'ACTION_COMPLETED',
@@ -948,29 +948,29 @@ async function runPostSubmissionScript(skipTabStateCheck = false) {
 
 // Handle manual script trigger from background/popup
 async function handleManualScriptTrigger(scriptType, mode) {
-  console.log(`=== MANUAL TRIGGER: ${scriptType} (mode: ${mode}) ===`)
+  submitLogger.log(`=== MANUAL TRIGGER: ${scriptType} (mode: ${mode}) ===`)
   
   try {
     if (scriptType === 'post') {
       // Clear any existing script stage for manual execution
       sessionStorage.removeItem('reddit-post-machine-script-stage')
-      console.log('Manually triggering post submission script')
+      submitLogger.log('Manually triggering post submission script')
       await runPostSubmissionScript()
     } else {
-      console.log(`Manual trigger for ${scriptType} not handled by submit script`)
+      submitLogger.log(`Manual trigger for ${scriptType} not handled by submit script`)
     }
   } catch (error) {
-    console.error('Manual script trigger error:', error)
+    submitLogger.error('Manual script trigger error:', error)
   }
 }
 
 // Handle start post creation from background script
 function handleStartPostCreation(userName, postData) {
-  console.log(`Starting post creation for user: ${userName}`, postData)
+  submitLogger.log(`Starting post creation for user: ${userName}`, postData)
   
   // Check if already on submit page - if so, don't create new tab
   if (window.location.href.includes('/submit')) {
-    console.log('Already on submit page, storing post data and triggering submission')
+    submitLogger.log('Already on submit page, storing post data and triggering submission')
     if (postData) {
       sessionStorage.setItem('reddit-post-machine-postdata', JSON.stringify(postData));
     }
@@ -984,37 +984,37 @@ function handleStartPostCreation(userName, postData) {
   }
   
   // Check if user is logged in first
-  console.log('Checking if user is logged in using proven method...')
+  submitLogger.log('Checking if user is logged in using proven method...')
   
   // Look for the avatar button that would indicate logged in state
   const avatarButton = qs('rpl-dropdown div, [data-testid="user-avatar"], button[aria-label*="user"], #expand-user-drawer-button')
   
   if (avatarButton) {
-    console.log('Found user avatar button - user is logged in')
+    submitLogger.log('Found user avatar button - user is logged in')
   } else {
-    console.log('User avatar button not found - user may not be logged in')
+    submitLogger.log('User avatar button not found - user may not be logged in')
     return
   }
   
   // Request background script to create new tab instead of navigating
-  console.log('Requesting background script to create new post tab')
+  submitLogger.log('Requesting background script to create new post tab')
   chrome.runtime.sendMessage({
     type: 'CREATE_POST_TAB',
     postData: postData // Only use data provided by background script
   }).then(response => {
     if (response.success) {
-      console.log('Background script created post tab successfully:', response.tabId)
+      submitLogger.log('Background script created post tab successfully:', response.tabId)
     } else {
-      console.error('Failed to create post tab:', response.error)
+      submitLogger.error('Failed to create post tab:', response.error)
     }
   }).catch(error => {
-    console.error('Error requesting post tab creation:', error)
+    submitLogger.error('Error requesting post tab creation:', error)
   })
 }
 
 // Message listener
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  console.log('Submit script received message:', message)
+  submitLogger.log('Submit script received message:', message)
   
   switch (message.type) {
     case 'START_POST_CREATION':
@@ -1027,7 +1027,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       
     case 'DELETE_LAST_POST':
       // Submit script delegates delete operations to main content script
-      console.log('Submit script: DELETE_LAST_POST not supported on submit page, delegating...')
+      submitLogger.log('Submit script: DELETE_LAST_POST not supported on submit page, delegating...')
       chrome.runtime.sendMessage({
         type: 'ACTION_COMPLETED',
         action: 'DELETE_LAST_POST',
@@ -1043,8 +1043,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 })
 
 // Initialize submit script
-console.log('🟢 SUBMIT content script loaded on URL:', window.location.href)
-console.log('🟢 SUBMIT script: All loaded scripts check:', document.querySelectorAll('script').length)
+submitLogger.log('🟢 SUBMIT content script loaded on URL:', window.location.href)
+submitLogger.log('🟢 SUBMIT script: All loaded scripts check:', document.querySelectorAll('script').length)
 
 // Note: Auto-run disabled to prevent automatic tab creation
 // Auto-run would be triggered here if needed
@@ -1052,5 +1052,5 @@ console.log('🟢 SUBMIT script: All loaded scripts check:', document.querySelec
 // Export default function for Quasar bridge compatibility
 export default function (bridge) {
   // This function is called by Quasar's BEX bridge system
-  console.log('Submit script bridge initialized', bridge)
+  submitLogger.log('Submit script bridge initialized', bridge)
 }

@@ -1,4 +1,4 @@
-/**
+import { bgLogger } from "./logger.js";/**
  * Message Handlers Module
  * Handles all chrome.runtime.onMessage events and tab management operations
  */
@@ -14,6 +14,7 @@ import {
   touchTabState
 } from './state-manager.js'
 import { PostDataService, fetchNextPost } from './post-service.js'
+import { openOrFocusExtensionTab } from './extension-tab-manager.js'
 
 // Finalize reload listeners and timeouts
 const finalizeReloadListeners = {}
@@ -23,7 +24,7 @@ const finalizeReloadTimeouts = {}
  * Log message to a specific tab
  */
 export function logToTab(tabId, message) {
-  console.log(`[BG Log -> Tab ${tabId}] ${message}`)
+  bgLogger.log(`[BG Log -> Tab ${tabId}] ${message}`)
   if (tabId) {
     chrome.tabs.sendMessage(
       tabId,
@@ -70,7 +71,7 @@ export async function waitForContentScript(tabId, { retries = 12, initialDelayMs
 export async function sendGetPosts(tabId, userName, source) {
   const ready = await waitForContentScript(tabId)
   if (!ready) {
-    console.error(`[BG] Content script not reachable in tab ${tabId}, cannot send GET_POSTS (${source})`)
+    bgLogger.error(`[BG] Content script not reachable in tab ${tabId}, cannot send GET_POSTS (${source})`)
     logToTab(tabId, `Content script not reachable; skipping post collection (${source}).`)
     delete tabStates[tabId]
     return false
@@ -83,7 +84,7 @@ export async function sendGetPosts(tabId, userName, source) {
     })
     return true
   } catch (err) {
-    console.error(`[BG] Failed to send GET_POSTS (${source}):`, err)
+    bgLogger.error(`[BG] Failed to send GET_POSTS (${source}):`, err)
     delete tabStates[tabId]
     return false
   }
@@ -94,11 +95,11 @@ export async function sendGetPosts(tabId, userName, source) {
  */
 export async function createCleanPostTab(userName, postData) {
   try {
-    console.log('[BG] Creating clean post tab - closing current Reddit tabs first')
+    bgLogger.log('[BG] Creating clean post tab - closing current Reddit tabs first')
 
     const cleanSubreddit = (postData.subreddit || 'test').replace(/^r\//i, '')
     const submitUrl = `https://www.reddit.com/r/${cleanSubreddit}/submit`
-    console.log(`[BG] Creating new clean tab at ${submitUrl}`)
+    bgLogger.log(`[BG] Creating new clean tab at ${submitUrl}`)
 
     const newTab = await chrome.tabs.create({
       url: submitUrl,
@@ -119,22 +120,22 @@ export async function createCleanPostTab(userName, postData) {
       if (tabId === newTab.id && changeInfo.status === 'complete') {
         chrome.tabs.onUpdated.removeListener(tabLoadListener)
 
-        console.log(`[BG] Clean post tab ${newTab.id} loaded, URL: ${tab.url}`)
+        bgLogger.log(`[BG] Clean post tab ${newTab.id} loaded, URL: ${tab.url}`)
 
         if (!tab.url || !tab.url.includes('/submit')) {
-          console.error(`[BG] Tab ${newTab.id} is not on submit page: ${tab.url}`)
+          bgLogger.error(`[BG] Tab ${newTab.id} is not on submit page: ${tab.url}`)
           delete tabStates[newTab.id]
           return
         }
 
         setTimeout(() => {
-          console.log(`[BG] Sending START_POST_CREATION to tab ${newTab.id}`)
+          bgLogger.log(`[BG] Sending START_POST_CREATION to tab ${newTab.id}`)
           chrome.tabs.sendMessage(newTab.id, {
             type: 'START_POST_CREATION',
             userName: userName,
             postData: postData
           }).catch((err) => {
-            console.error(`[BG] Failed to send post data to clean tab ${newTab.id}:`, err)
+            bgLogger.error(`[BG] Failed to send post data to clean tab ${newTab.id}:`, err)
             delete tabStates[newTab.id]
           })
         }, 2000)
@@ -144,7 +145,7 @@ export async function createCleanPostTab(userName, postData) {
     chrome.tabs.onUpdated.addListener(tabLoadListener)
     return newTab.id
   } catch (error) {
-    console.error('[BG] Failed to create clean post tab:', error)
+    bgLogger.error('[BG] Failed to create clean post tab:', error)
     throw error
   }
 }
@@ -153,7 +154,7 @@ export async function createCleanPostTab(userName, postData) {
  * Create or reuse a post tab for submission
  */
 export async function createOrReusePostTab(userName, postData) {
-  console.log(`[BG] Creating/reusing post tab for ${userName} with data:`, postData)
+  bgLogger.log(`[BG] Creating/reusing post tab for ${userName} with data:`, postData)
 
   const cleanSubreddit = (postData.subreddit || 'sphynx').replace(/^r\//i, '')
   const submitUrl = `https://www.reddit.com/r/${cleanSubreddit}/submit`
@@ -167,12 +168,12 @@ export async function createOrReusePostTab(userName, postData) {
       const reusableTabs = existingTabs.filter((tab) => {
         const state = tabStates[tab.id]
         if (state && state.status !== SM_STEPS.IDLE) {
-          console.log(`[BG] Skipping tab ${tab.id} - active automation state: ${state.status}`)
+          bgLogger.log(`[BG] Skipping tab ${tab.id} - active automation state: ${state.status}`)
           return false
         }
 
         if (tab.url && tab.url.includes('/submit')) {
-          console.log(`[BG] Skipping tab ${tab.id} - already on submit page`)
+          bgLogger.log(`[BG] Skipping tab ${tab.id} - already on submit page`)
           return false
         }
 
@@ -183,26 +184,26 @@ export async function createOrReusePostTab(userName, postData) {
         const inactiveTab = reusableTabs.find((tab) => !tab.active)
         targetTab = inactiveTab || reusableTabs[0]
 
-        console.log(`[BG] Reusing existing tab ${targetTab.id} for post submission`)
+        bgLogger.log(`[BG] Reusing existing tab ${targetTab.id} for post submission`)
 
         await chrome.tabs.update(targetTab.id, {
           url: submitUrl,
           active: true
         })
       } else {
-        console.log(`[BG] No reusable tabs found, creating new tab`)
+        bgLogger.log(`[BG] No reusable tabs found, creating new tab`)
       }
     }
 
     if (!targetTab) {
-      console.log(`[BG] Creating new tab for post submission`)
+      bgLogger.log(`[BG] Creating new tab for post submission`)
       targetTab = await chrome.tabs.create({
         url: submitUrl,
         active: true
       })
     }
 
-    console.log(`[BG] Using tab ${targetTab.id} at ${submitUrl}`)
+    bgLogger.log(`[BG] Using tab ${targetTab.id} at ${submitUrl}`)
 
     tabStates[targetTab.id] = {
       status: SM_STEPS.POSTING,
@@ -216,22 +217,22 @@ export async function createOrReusePostTab(userName, postData) {
       if (tabId === targetTab.id && changeInfo.status === 'complete') {
         chrome.tabs.onUpdated.removeListener(tabLoadListener)
 
-        console.log(`[BG] Post tab ${targetTab.id} loaded, URL: ${tab.url}`)
+        bgLogger.log(`[BG] Post tab ${targetTab.id} loaded, URL: ${tab.url}`)
 
         if (!tab.url || !tab.url.includes('/submit')) {
-          console.error(`[BG] Tab ${targetTab.id} is not on submit page: ${tab.url}`)
+          bgLogger.error(`[BG] Tab ${targetTab.id} is not on submit page: ${tab.url}`)
           delete tabStates[targetTab.id]
           return
         }
 
         setTimeout(() => {
-          console.log(`[BG] Sending START_POST_CREATION to tab ${targetTab.id}`)
+          bgLogger.log(`[BG] Sending START_POST_CREATION to tab ${targetTab.id}`)
           chrome.tabs.sendMessage(targetTab.id, {
             type: 'START_POST_CREATION',
             userName: userName,
             postData: postData
           }).catch((err) => {
-            console.error(`[BG] Failed to send post data to tab ${targetTab.id}:`, err)
+            bgLogger.error(`[BG] Failed to send post data to tab ${targetTab.id}:`, err)
             delete tabStates[targetTab.id]
           })
         }, 2000)
@@ -242,7 +243,7 @@ export async function createOrReusePostTab(userName, postData) {
 
     return targetTab.id
   } catch (error) {
-    console.error('[BG] Failed to create/reuse post tab:', error)
+    bgLogger.error('[BG] Failed to create/reuse post tab:', error)
     throw error
   }
 }
@@ -316,13 +317,13 @@ export async function finalizeAutoFlowToSubmitted(tabId, userName) {
  * Proceed with post creation
  */
 export async function proceedWithPostCreation(userName, monitoringTabId) {
-  console.log('[BG] Proceeding with post creation')
+  bgLogger.log('[BG] Proceeding with post creation')
 
   await AutoFlowStateManager.saveState('creating_post', { userName, targetAction: 'create' })
 
   const state = tabStates[monitoringTabId]
   if (state && state.postCreationInProgress) {
-    console.log('[BG] Post creation already in progress, skipping duplicate call')
+    bgLogger.log('[BG] Post creation already in progress, skipping duplicate call')
     return
   }
 
@@ -334,23 +335,23 @@ export async function proceedWithPostCreation(userName, monitoringTabId) {
     const newPostData = await fetchNextPost()
 
     if (newPostData) {
-      console.log('[BG] Creating new post tab for fresh post')
+      bgLogger.log('[BG] Creating new post tab for fresh post')
 
       createCleanPostTab(userName, newPostData)
         .then((newTabId) => {
-          console.log(`[BG] Created new post tab ${newTabId} for ${userName}`)
+          bgLogger.log(`[BG] Created new post tab ${newTabId} for ${userName}`)
           delete tabStates[monitoringTabId]
         })
         .catch((err) => {
-          console.error('[BG] Failed to create post tab:', err)
+          bgLogger.error('[BG] Failed to create post tab:', err)
           delete tabStates[monitoringTabId]
         })
     } else {
-      console.log('[BG] Failed to generate new post data')
+      bgLogger.log('[BG] Failed to generate new post data')
       delete tabStates[monitoringTabId]
     }
   } catch (error) {
-    console.error('[BG] Error in proceedWithPostCreation:', error)
+    bgLogger.error('[BG] Error in proceedWithPostCreation:', error)
     delete tabStates[monitoringTabId]
   }
 }
@@ -359,7 +360,7 @@ export async function proceedWithPostCreation(userName, monitoringTabId) {
  * Start automation for a tab
  */
 export function startAutomationForTab(tabId, userName) {
-  console.log(`[BG] Starting automation for tab ${tabId} with user ${userName}`)
+  bgLogger.log(`[BG] Starting automation for tab ${tabId} with user ${userName}`)
 
   const currentIntervalId = getCheckIntervalId()
   if (currentIntervalId) clearInterval(currentIntervalId)
@@ -378,16 +379,16 @@ export async function triggerPeriodicCheck(tabId, userName) {
   const currentState = tabStates[tabId]
 
   if (currentState && currentState.status === SM_STEPS.POSTING) {
-    console.log('[BG] Skipping periodic check - Posting in progress (Locked)')
+    bgLogger.log('[BG] Skipping periodic check - Posting in progress (Locked)')
     return
   }
 
   if (currentState) {
-    console.log(`[BG] Skipping periodic check - Busy in state: ${currentState.status}`)
+    bgLogger.log(`[BG] Skipping periodic check - Busy in state: ${currentState.status}`)
     return
   }
 
-  console.log(`[BG] Triggering periodic post check for ${userName}`)
+  bgLogger.log(`[BG] Triggering periodic post check for ${userName}`)
 
   try {
     const { latestPostsData } = await chrome.storage.local.get(['latestPostsData'])
@@ -417,7 +418,7 @@ export async function triggerPeriodicCheck(tabId, userName) {
   const cleanUsername = userName.replace('u/', '')
   const directPostsUrl = `https://www.reddit.com/user/${cleanUsername}/submitted/`
 
-  console.log(`[BG] 🚀 Using direct URL navigation optimization: ${directPostsUrl}`)
+  bgLogger.log(`[BG] 🚀 Using direct URL navigation optimization: ${directPostsUrl}`)
 
   tabStates[tabId] = {
     status: SM_STEPS.COLLECTING_POSTS,
@@ -430,7 +431,7 @@ export async function triggerPeriodicCheck(tabId, userName) {
   }
 
   chrome.tabs.update(tabId, { url: directPostsUrl }).catch((err) => {
-    console.error('[BG] Failed to navigate directly to posts URL:', err)
+    bgLogger.error('[BG] Failed to navigate directly to posts URL:', err)
     logToTab(tabId, `Error navigating to posts URL: ${err.message}`)
     delete tabStates[tabId]
   })
@@ -439,7 +440,7 @@ export async function triggerPeriodicCheck(tabId, userName) {
     if (updatedTabId === tabId && changeInfo.status === 'complete' && tab.url.includes('/submitted')) {
       const state = tabStates[tabId]
       if (state && state.usedDirectNavigation && !state.advancedToCollecting) {
-        console.log('[BG] Backup trigger: Tab loaded, sending GET_POSTS command')
+        bgLogger.log('[BG] Backup trigger: Tab loaded, sending GET_POSTS command')
         state.advancedToCollecting = true
         logToTab(tabId, 'Backup trigger: Tab fully loaded, starting post collection.')
 
@@ -463,7 +464,7 @@ export async function triggerPeriodicCheck(tabId, userName) {
  * Check and advance state based on URL changes
  */
 export function checkAndAdvanceState(tabId, state, url) {
-  console.log(`[Auto Check] Checking state for tab ${tabId}. Status: ${state.status}, URL: ${url}`)
+  bgLogger.log(`[Auto Check] Checking state for tab ${tabId}. Status: ${state.status}, URL: ${url}`)
 
   touchTabState(state)
 
@@ -478,7 +479,7 @@ export function checkAndAdvanceState(tabId, state, url) {
           type: 'REDDIT_POST_MACHINE_NAVIGATE_POSTS',
           payload: { userName: state.userName }
         }).catch((err) => {
-          console.error('[Auto Check] Failed to send NAVIGATE_POSTS:', err)
+          bgLogger.error('[Auto Check] Failed to send NAVIGATE_POSTS:', err)
           logToTab(tabId, `Error sending NAVIGATE_POSTS: ${err.message}`)
         })
       }
@@ -511,7 +512,7 @@ export function checkAndAdvanceState(tabId, state, url) {
 export function handleContentScriptReady(tabId, url) {
   const state = tabStates[tabId]
   if (state) {
-    console.log(`Content script ready in tab ${tabId} (State: ${state.status}). URL: ${url}`)
+    bgLogger.log(`Content script ready in tab ${tabId} (State: ${state.status}). URL: ${url}`)
     checkAndAdvanceState(tabId, state, url)
   }
 }
@@ -520,11 +521,11 @@ export function handleContentScriptReady(tabId, url) {
  * Handle ACTION_COMPLETED message
  */
 export async function handleActionCompleted(tabId, action, success, data) {
-  console.log(`[BG] handleActionCompleted called for tab ${tabId}, action ${action}`)
+  bgLogger.log(`[BG] handleActionCompleted called for tab ${tabId}, action ${action}`)
 
   const state = tabStates[tabId]
   if (!state) {
-    console.log(`[BG] State already cleared for tab ${tabId}. Action ${action} was likely the final step.`)
+    bgLogger.log(`[BG] State already cleared for tab ${tabId}. Action ${action} was likely the final step.`)
     return
   }
 
@@ -533,7 +534,7 @@ export async function handleActionCompleted(tabId, action, success, data) {
   touchTabState(state)
 
   if (!success) {
-    console.warn(`Action ${action} failed. Aborting automation.`)
+    bgLogger.warn(`Action ${action} failed. Aborting automation.`)
     delete tabStates[tabId]
     return
   }
@@ -552,10 +553,10 @@ export async function handleActionCompleted(tabId, action, success, data) {
         chrome.tabs.sendMessage(tabId, {
           type: 'REDDIT_POST_MACHINE_NAVIGATE_POSTS',
           payload: { userName: state.userName }
-        }).catch((err) => console.error(`[State Machine] Error sending NAVIGATE_POSTS:`, err))
+        }).catch((err) => bgLogger.error(`[State Machine] Error sending NAVIGATE_POSTS:`, err))
       }, 1500)
     } else {
-      console.log('[BG] Already advanced to NAVIGATING_POSTS via fast-track. Skipping.')
+      bgLogger.log('[BG] Already advanced to NAVIGATING_POSTS via fast-track. Skipping.')
     }
   } else if (action === 'NAVIGATE_POSTS' && state.status === SM_STEPS.NAVIGATING_POSTS) {
     if (!state.advancedToCollecting) {
@@ -571,10 +572,10 @@ export async function handleActionCompleted(tabId, action, success, data) {
         sendGetPosts(tabId, state.userName, 'state_machine_navigate_posts')
       }, 1500)
     } else {
-      console.log('[BG] Already advanced to COLLECTING_POSTS via fast-track. Skipping.')
+      bgLogger.log('[BG] Already advanced to COLLECTING_POSTS via fast-track. Skipping.')
     }
   } else if (action === 'NAVIGATE_POSTS' && state.status === SM_STEPS.DELETING_POST) {
-    console.log('[BG] NAVIGATE_POSTS completed for deletion, now sending DELETE_POST command')
+    bgLogger.log('[BG] NAVIGATE_POSTS completed for deletion, now sending DELETE_POST command')
 
     setTimeout(() => {
       logToTab(tabId, 'Sending DELETE_POST command')
@@ -582,8 +583,8 @@ export async function handleActionCompleted(tabId, action, success, data) {
         type: 'REDDIT_POST_MACHINE_DELETE_POST',
         payload: { post: state.lastPostToDelete }
       }).catch((err) => {
-        console.error('[BG] ❌ Failed to send delete command:', err)
-        console.log('[BG] ⚠️ FALLBACK: Proceeding with post creation anyway')
+        bgLogger.error('[BG] ❌ Failed to send delete command:', err)
+        bgLogger.log('[BG] ⚠️ FALLBACK: Proceeding with post creation anyway')
         proceedWithPostCreation(state.userName, tabId)
       })
     }, 2000)
@@ -600,19 +601,19 @@ export async function handleActionCompleted(tabId, action, success, data) {
  * Handle GET_POSTS action completion
  */
 async function handleGetPostsAction(tabId, state, data) {
-  console.log('[BG] 📊 GET_POSTS action received, collecting fresh data for decision...')
+  bgLogger.log('[BG] 📊 GET_POSTS action received, collecting fresh data for decision...')
 
   if (state && state.status === SM_STEPS.COLLECTING_POSTS) {
-    console.log('[BG] State machine flow: Collection complete')
+    bgLogger.log('[BG] State machine flow: Collection complete')
   } else {
-    console.log('[BG] Direct status check flow: Running decision analysis')
+    bgLogger.log('[BG] Direct status check flow: Running decision analysis')
   }
 
-  console.log('[BG] Requesting fresh posts data for autoflow decision...')
+  bgLogger.log('[BG] Requesting fresh posts data for autoflow decision...')
 
   try {
     const tab = await chrome.tabs.get(tabId)
-    console.log('[BG] Target tab for fresh data collection:', tab.url)
+    bgLogger.log('[BG] Target tab for fresh data collection:', tab.url)
 
     const sendMessagePromise = new Promise((resolve, reject) => {
       chrome.tabs.sendMessage(
@@ -623,10 +624,10 @@ async function handleGetPostsAction(tabId, state, data) {
         },
         (response) => {
           if (chrome.runtime.lastError) {
-            console.log('[BG] Content script not available, using cached data')
+            bgLogger.log('[BG] Content script not available, using cached data')
             reject(new Error('Content script not available: ' + chrome.runtime.lastError.message))
           } else {
-            console.log('[BG] Message sent successfully to content script')
+            bgLogger.log('[BG] Message sent successfully to content script')
             resolve(true)
           }
         }
@@ -639,7 +640,7 @@ async function handleGetPostsAction(tabId, state, data) {
       const messageListener = (message, sender, sendResponse) => {
         if (message.type === 'FRESH_POSTS_COLLECTED' && sender.tab?.id === tabId) {
           chrome.runtime.onMessage.removeListener(messageListener)
-          console.log('[BG] Received FRESH_POSTS_COLLECTED response:', message.data)
+          bgLogger.log('[BG] Received FRESH_POSTS_COLLECTED response:', message.data)
           resolve(message.data)
         }
       }
@@ -652,13 +653,13 @@ async function handleGetPostsAction(tabId, state, data) {
     })
 
     const freshPostsData = await freshDataPromise
-    console.log('[BG] Successfully received fresh posts data:', freshPostsData)
+    bgLogger.log('[BG] Successfully received fresh posts data:', freshPostsData)
 
     if (freshPostsData && freshPostsData.dataFresh) {
       var dataForAnalysis = freshPostsData
-      console.log('[BG] Using fresh data for analysis:', dataForAnalysis)
+      bgLogger.log('[BG] Using fresh data for analysis:', dataForAnalysis)
     } else {
-      console.log('[BG] Fresh data invalid, falling back to normalized cached data')
+      bgLogger.log('[BG] Fresh data invalid, falling back to normalized cached data')
       var dataForAnalysis = {
         userName: state.userName,
         postsInfo: {
@@ -670,7 +671,7 @@ async function handleGetPostsAction(tabId, state, data) {
       }
     }
   } catch (error) {
-    console.warn('[BG] Failed to get fresh posts data, using cached data. Error:', error.message)
+    bgLogger.warn('[BG] Failed to get fresh posts data, using cached data. Error:', error.message)
     var dataForAnalysis = {
       userName: state.userName,
       postsInfo: {
@@ -680,22 +681,22 @@ async function handleGetPostsAction(tabId, state, data) {
       },
       lastPost: data?.lastPost || null
     }
-    console.log('[BG] Normalized cached data structure for analysis:', dataForAnalysis)
+    bgLogger.log('[BG] Normalized cached data structure for analysis:', dataForAnalysis)
   }
 
   PostDataService.shouldCreatePost(dataForAnalysis)
     .then(async (result) => {
-      console.log('[BG] 🎯 FINAL DECISION RESULT:', {
+      bgLogger.log('[BG] 🎯 FINAL DECISION RESULT:', {
         shouldCreate: result.shouldCreate,
         reason: result.reason,
         decisionReport: result.decisionReport
       })
 
       if (result.shouldCreate) {
-        console.log(`[BG] 🚀 EXECUTING: New post required. Reason: ${result.reason}`)
+        bgLogger.log(`[BG] 🚀 EXECUTING: New post required. Reason: ${result.reason}`)
 
-        if (result.lastPost && (result.reason === 'post_blocked' || result.reason === 'post_downvoted')) {
-          console.log('[BG] 🗑️ STEP 1: Attempting to delete last post before creating new one')
+        if (result.lastPost && (result.reason === 'post_blocked' || result.reason === 'post_downvoted' || result.reason === 'post_removed' || result.reason === 'low_engagement')) {
+          bgLogger.log('[BG] 🗑️ STEP 1: Attempting to delete last post before creating new one')
 
           state.deletingBeforeCreating = true
 
@@ -712,14 +713,13 @@ async function handleGetPostsAction(tabId, state, data) {
               userName: state.userName
             })
             .then((response) => {
-              console.log('[BG] Delete command sent successfully:', response)
-              setTimeout(() => {
-                proceedWithPostCreation(state.userName, tabId)
-              }, 3000)
+              bgLogger.log('[BG] Delete command sent successfully:', response)
+              // After deletion, wait for handleDeletePostCompleted to restart autoflow
+              // Do NOT proceed directly to post creation
             })
-            .catch((err) => {
-              console.error('[BG] ❌ Failed to send delete command:', err)
-              console.log('[BG] ⚠️ FALLBACK: Proceeding with post creation anyway')
+            .catch(async (err) => {
+              bgLogger.error('[BG] ❌ Failed to send delete command:', err)
+              bgLogger.log('[BG] ⚠️ FALLBACK: Restarting autoflow instead of creating post')
 
               const failedDeleteResult = {
                 status: 'failed',
@@ -731,14 +731,19 @@ async function handleGetPostsAction(tabId, state, data) {
 
               PostDataService.saveExecutionResult(failedDeleteResult)
               state.deletingBeforeCreating = false
-              proceedWithPostCreation(state.userName, tabId)
+
+              // Restart autoflow from beginning instead of proceeding to post creation
+              await AutoFlowStateManager.clearState(state.userName)
+              await handleCheckUserStatus(state.userName, (response) => {
+                bgLogger.log('[BG] Restarted autoflow after failed delete:', response)
+              })
             })
         } else {
-          console.log('[BG] 📝 STEP 1: No deletion needed, proceeding directly to post creation')
+          bgLogger.log('[BG] 📝 STEP 1: No deletion needed, proceeding directly to post creation')
           proceedWithPostCreation(state.userName, tabId)
         }
       } else {
-        console.log('[BG] ✅ COMPLETE: No new post needed. Clearing state and waiting for next interval.')
+        bgLogger.log('[BG] ✅ COMPLETE: No new post needed. Clearing state and waiting for next interval.')
 
         await AutoFlowStateManager.clearState(state.userName)
 
@@ -757,7 +762,7 @@ async function handleGetPostsAction(tabId, state, data) {
       }
     })
     .catch((err) => {
-      console.error('[BG] ❌ ERROR: Error analyzing posts:', err)
+      bgLogger.error('[BG] ❌ ERROR: Error analyzing posts:', err)
       delete tabStates[tabId]
     })
 }
@@ -766,7 +771,7 @@ async function handleGetPostsAction(tabId, state, data) {
  * Handle POST_CREATION_COMPLETED action
  */
 async function handlePostCreationCompleted(tabId, state, success, data) {
-  console.log('[BG] Posting process completed. Closing submit tab and opening reddit.com for status check.')
+  bgLogger.log('[BG] Posting process completed. Closing submit tab and opening reddit.com for status check.')
 
   const wasDeletingBeforeCreating = state && state.deletingBeforeCreating
   let userName = state?.userName
@@ -783,7 +788,7 @@ async function handlePostCreationCompleted(tabId, state, success, data) {
   if (success) {
     await AutoFlowStateManager.clearState(userName)
     await chrome.storage.local.remove(['latestPostsData'])
-    console.log(`[BG] ✅ Auto-flow completed successfully, state cleared for user ${userName}`)
+    bgLogger.log(`[BG] ✅ Auto-flow completed successfully, state cleared for user ${userName}`)
   }
 
   const executionResult = {
@@ -800,10 +805,10 @@ async function handlePostCreationCompleted(tabId, state, success, data) {
     const tab = await chrome.tabs.get(tabId)
     if (tab) {
       await chrome.tabs.remove(tabId)
-      console.log(`[BG] Closed submit tab ${tabId}`)
+      bgLogger.log(`[BG] Closed submit tab ${tabId}`)
     }
   } catch (error) {
-    console.warn(`[BG] Submit tab ${tabId} already closed or not found:`, error)
+    bgLogger.warn(`[BG] Submit tab ${tabId} already closed or not found:`, error)
   }
 
   if (success && !userName) {
@@ -825,7 +830,7 @@ async function handlePostCreationCompleted(tabId, state, success, data) {
         })
         finalizeAutoFlowToSubmitted(newTab.id, userName)
       } catch (error) {
-        console.error('[BG] Failed to open submitted posts page after post creation:', error)
+        bgLogger.error('[BG] Failed to open submitted posts page after post creation:', error)
       }
     }, 1000)
   }
@@ -835,13 +840,13 @@ async function handlePostCreationCompleted(tabId, state, success, data) {
  * Handle DELETE_POST_COMPLETED action
  */
 async function handleDeletePostCompleted(tabId, state, success, data) {
-  console.log('[BG] Delete post operation completed.')
-  console.log('[BG] Delete data received:', data)
-  console.log('[BG] Success value:', success)
+  bgLogger.log('[BG] Delete post operation completed.')
+  bgLogger.log('[BG] Delete data received:', data)
+  bgLogger.log('[BG] Success value:', success)
 
   const userName = state?.userName || data?.userName
-  console.log('[BG] Tab state:', state)
-  console.log('[BG] Username extracted:', userName)
+  bgLogger.log('[BG] Tab state:', state)
+  bgLogger.log('[BG] Username extracted:', userName)
 
   await AutoFlowStateManager.saveState('deletion_completed', {
     userName,
@@ -860,21 +865,20 @@ async function handleDeletePostCompleted(tabId, state, success, data) {
   PostDataService.saveExecutionResult(executionResult)
 
   if (success) {
-    console.log('[BG] Delete was successful, proceeding with page reload logic')
+    bgLogger.log('[BG] ✅ Delete was successful, clearing cache and restarting autoflow from beginning')
     await chrome.storage.local.remove(['latestPostsData'])
 
     if (userName) {
-      console.log('[BG] Username is available, executing page reload')
-      const cleanUsername = userName.replace('u/', '')
-      const submittedUrl = `https://www.reddit.com/user/${cleanUsername}/submitted/`
-      console.log(`[BG] Reloading page to submitted posts: ${submittedUrl}`)
+      bgLogger.log('[BG] 🔄 Restarting autoflow analysis after deletion')
 
-      try {
-        await chrome.tabs.update(tabId, { url: submittedUrl })
-        console.log(`[BG] Successfully reloaded tab ${tabId} to submitted posts page`)
-      } catch (error) {
-        console.error(`[BG] Failed to reload tab ${tabId} to submitted posts:`, error)
-      }
+      // Clear the current state to start fresh
+      await AutoFlowStateManager.clearState(userName)
+
+      // Trigger fresh autoflow check from the beginning
+      bgLogger.log(`[BG] 🚀 Triggering fresh autoflow check for ${userName}`)
+      await handleCheckUserStatus(userName, (response) => {
+        bgLogger.log('[BG] Fresh autoflow check initiated after deletion:', response)
+      })
     }
   }
 }
@@ -908,7 +912,7 @@ export function handleGetRedditInfo(sendResponse) {
  * Handle post creation
  */
 export async function handleCreatePost(postData, sendResponse) {
-  console.log('Creating post:', postData)
+  bgLogger.log('Creating post:', postData)
 
   try {
     let postToSubmit
@@ -922,28 +926,29 @@ export async function handleCreatePost(postData, sendResponse) {
       postToSubmit = postData
     } else {
       if (redditUser && redditUser.seren_name) {
-        console.log(`[BG] Generating post for user: ${redditUser.seren_name}`)
+        bgLogger.log(`[BG] Generating post for user: ${redditUser.seren_name}`)
         postToSubmit = await PostDataService.generatePost(redditUser.seren_name)
       } else {
-        console.log('[BG] No username found, using dummy post')
-        postToSubmit = PostDataService.generateDummyPost()
+        const errorMessage = 'No username found - cannot generate post without user context'
+        bgLogger.error('[BG] ' + errorMessage)
+        throw new Error(errorMessage)
       }
     }
 
-    console.log('[BG] Post data to submit:', postToSubmit)
+    bgLogger.log('[BG] Post data to submit:', postToSubmit)
 
     const tabs = await chrome.tabs.query({ url: "*://*.reddit.com/*/submit*" })
     let targetTab
 
     if (tabs.length > 0) {
       targetTab = tabs[0]
-      console.log('[BG] Using existing submit tab:', targetTab.id)
+      bgLogger.log('[BG] Using existing submit tab:', targetTab.id)
     } else {
       targetTab = await chrome.tabs.create({
         url: 'https://www.reddit.com/submit',
         active: false
       })
-      console.log('[BG] Created new submit tab:', targetTab.id)
+      bgLogger.log('[BG] Created new submit tab:', targetTab.id)
 
       await new Promise((resolve) => {
         chrome.tabs.onUpdated.addListener(function tabLoadListener(tabId, changeInfo) {
@@ -963,7 +968,7 @@ export async function handleCreatePost(postData, sendResponse) {
         userName: userName,
         postData: postToSubmit
       }).catch((err) => {
-        console.error(`[BG] Failed to send post data to tab ${targetTab.id}:`, err)
+        bgLogger.error(`[BG] Failed to send post data to tab ${targetTab.id}:`, err)
       })
     }, 3000)
 
@@ -973,7 +978,7 @@ export async function handleCreatePost(postData, sendResponse) {
       tabId: targetTab.id
     })
   } catch (error) {
-    console.error('[BG] Failed to create post:', error)
+    bgLogger.error('[BG] Failed to create post:', error)
     sendResponse({
       success: false,
       error: error.message
@@ -1004,7 +1009,7 @@ export function handleSaveSettings(settings, sendResponse) {
  * Handle username storage notification
  */
 export function handleUsernameStored(username, timestamp, sendResponse) {
-  console.log(`Background: Received username storage notification - ${username}`)
+  bgLogger.log(`Background: Received username storage notification - ${username}`)
   chrome.action.setBadgeText({ text: '✓' })
   chrome.action.setBadgeBackgroundColor({ color: '#4caf50' })
   setTimeout(() => { chrome.action.setBadgeText({ text: '' }) }, 3000)
@@ -1036,7 +1041,7 @@ export async function handleGetStoredUsername(sendResponse) {
  * Handle user status saved notification
  */
 export function handleUserStatusSaved(statusData, sendResponse) {
-  console.log(`Background: User status saved - ${statusData.userName}`)
+  bgLogger.log(`Background: User status saved - ${statusData.userName}`)
   chrome.action.setBadgeText({ text: '📊' })
   chrome.action.setBadgeBackgroundColor({ color: '#2196f3' })
   setTimeout(() => { chrome.action.setBadgeText({ text: '' }) }, 4000)
@@ -1069,11 +1074,11 @@ export async function handleGetUserStatus(sendResponse) {
  * Handle manual post creation from popup
  */
 export async function handleCreatePostFromPopup(userName, sendResponse) {
-  console.log(`[BG] Manual post creation requested for ${userName}`)
+  bgLogger.log(`[BG] Manual post creation requested for ${userName}`)
 
   try {
     const postData = await PostDataService.generatePost(userName)
-    console.log('[BG] Generated post data for manual creation:', postData)
+    bgLogger.log('[BG] Generated post data for manual creation:', postData)
 
     const newTabId = await createCleanPostTab(userName, postData)
 
@@ -1083,7 +1088,7 @@ export async function handleCreatePostFromPopup(userName, sendResponse) {
       tabId: newTabId
     })
   } catch (error) {
-    console.error('[BG] Failed to create post from popup:', error)
+    bgLogger.error('[BG] Failed to create post from popup:', error)
     sendResponse({
       success: false,
       error: error.message
@@ -1095,7 +1100,7 @@ export async function handleCreatePostFromPopup(userName, sendResponse) {
  * Resume interrupted auto-flow from saved state
  */
 export async function resumeAutoFlow(state, sendResponse) {
-  console.log(`[BG] 🔄 Resuming auto-flow from step: ${state.currentStep}`)
+  bgLogger.log(`[BG] 🔄 Resuming auto-flow from step: ${state.currentStep}`)
 
   try {
     switch (state.currentStep) {
@@ -1106,7 +1111,7 @@ export async function resumeAutoFlow(state, sendResponse) {
         break
 
       case 'deleting_post':
-        console.log('[BG] 🔄 Resuming delete operation')
+        bgLogger.log('[BG] 🔄 Resuming delete operation')
         if (state.tabId && state.lastPostToDelete) {
           const tabValid = await AutoFlowStateManager.validateTab(state.tabId)
           if (tabValid) {
@@ -1114,52 +1119,52 @@ export async function resumeAutoFlow(state, sendResponse) {
               type: 'DELETE_LAST_POST',
               userName: state.userName
             }).then((response) => {
-              console.log('[BG] Delete command sent successfully on resume:', response)
+              bgLogger.log('[BG] Delete command sent successfully on resume:', response)
               setTimeout(() => {
                 proceedWithPostCreation(state.userName, state.tabId)
               }, 3000)
             }).catch((err) => {
-              console.error('[BG] ❌ Failed to resume delete command:', err)
+              bgLogger.error('[BG] ❌ Failed to resume delete command:', err)
               proceedWithPostCreation(state.userName, state.tabId)
             })
           } else {
-            console.log('[BG] Tab is no longer valid, starting fresh')
+            bgLogger.log('[BG] Tab is no longer valid, starting fresh')
             await AutoFlowStateManager.clearState(state.userName)
             await handleCheckUserStatus(state.userName, sendResponse)
           }
         } else {
-          console.log('[BG] Cannot resume deletion - missing tab or post info, starting fresh')
+          bgLogger.log('[BG] Cannot resume deletion - missing tab or post info, starting fresh')
           await AutoFlowStateManager.clearState(state.userName)
           await handleCheckUserStatus(state.userName, sendResponse)
         }
         break
 
       case 'creating_post':
-        console.log('[BG] 🔄 Resuming post creation')
+        bgLogger.log('[BG] 🔄 Resuming post creation')
         if (state.tabId) {
           const tabValid = await AutoFlowStateManager.validateTab(state.tabId)
           if (tabValid) {
             proceedWithPostCreation(state.userName, state.tabId)
           } else {
-            console.log('[BG] Tab is no longer valid, starting fresh')
+            bgLogger.log('[BG] Tab is no longer valid, starting fresh')
             await AutoFlowStateManager.clearState(state.userName)
             await handleCheckUserStatus(state.userName, sendResponse)
           }
         } else {
-          console.log('[BG] Cannot resume post creation - missing tab info, starting fresh')
+          bgLogger.log('[BG] Cannot resume post creation - missing tab info, starting fresh')
           await AutoFlowStateManager.clearState(state.userName)
           await handleCheckUserStatus(state.userName, sendResponse)
         }
         break
 
       default:
-        console.log(`[BG] Unknown step ${state.currentStep}, starting fresh`)
+        bgLogger.log(`[BG] Unknown step ${state.currentStep}, starting fresh`)
         await AutoFlowStateManager.clearState(state.userName)
         await handleCheckUserStatus(state.userName, sendResponse)
         break
     }
   } catch (error) {
-    console.error('[BG] Failed to resume auto-flow:', error)
+    bgLogger.error('[BG] Failed to resume auto-flow:', error)
     await AutoFlowStateManager.clearState(state?.userName)
     sendResponse({
       success: false,
@@ -1172,12 +1177,12 @@ export async function resumeAutoFlow(state, sendResponse) {
  * Handle check user status from popup - triggers auto flow
  */
 export async function handleCheckUserStatus(userName, sendResponse) {
-  console.log(`[BG] User status check requested for ${userName} - starting auto flow`)
+  bgLogger.log(`[BG] User status check requested for ${userName} - starting auto flow`)
 
   try {
     const existingState = await AutoFlowStateManager.recoverState(userName)
     if (existingState) {
-      console.log(`[BG] 🔄 Resuming interrupted auto-flow for ${userName} at step: ${existingState.currentStep}`)
+      bgLogger.log(`[BG] 🔄 Resuming interrupted auto-flow for ${userName} at step: ${existingState.currentStep}`)
       await resumeAutoFlow(existingState, sendResponse)
       return
     }
@@ -1187,7 +1192,7 @@ export async function handleCheckUserStatus(userName, sendResponse) {
     const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true })
 
     if (!currentTab) {
-      console.log('[BG] No active tab found, creating new Reddit tab')
+      bgLogger.log('[BG] No active tab found, creating new Reddit tab')
       const newTab = await chrome.tabs.create({
         url: 'https://www.reddit.com/',
         active: true
@@ -1196,7 +1201,7 @@ export async function handleCheckUserStatus(userName, sendResponse) {
       const tabLoadListener = (tabId, changeInfo, tab) => {
         if (tabId === newTab.id && changeInfo.status === 'complete') {
           chrome.tabs.onUpdated.removeListener(tabLoadListener)
-          console.log(`[BG] New tab ${newTab.id} loaded, starting automation`)
+          bgLogger.log(`[BG] New tab ${newTab.id} loaded, starting automation`)
           startAutomationForTab(newTab.id, userName)
         }
       }
@@ -1212,7 +1217,7 @@ export async function handleCheckUserStatus(userName, sendResponse) {
     }
 
     const tabId = currentTab.id
-    console.log(`[BG] Using existing tab ${tabId} for automation`)
+    bgLogger.log(`[BG] Using existing tab ${tabId} for automation`)
 
     const existingTabState = tabStates[tabId]
     if (existingTabState) {
@@ -1220,13 +1225,13 @@ export async function handleCheckUserStatus(userName, sendResponse) {
       const isStuck = stateAge > 30000
 
       if (isStuck || existingTabState.status === SM_STEPS.COLLECTING_POSTS) {
-        console.log(`[BG] Cleaning up stuck state for tab ${tabId} (status: ${existingTabState.status}, age: ${stateAge}ms)`)
+        bgLogger.log(`[BG] Cleaning up stuck state for tab ${tabId} (status: ${existingTabState.status}, age: ${stateAge}ms)`)
         delete tabStates[tabId]
       }
     }
 
     if (!currentTab.url.includes('reddit.com')) {
-      console.log(`[BG] Navigating tab ${tabId} to Reddit`)
+      bgLogger.log(`[BG] Navigating tab ${tabId} to Reddit`)
       await chrome.tabs.update(tabId, {
         url: 'https://www.reddit.com/',
         active: true
@@ -1235,13 +1240,13 @@ export async function handleCheckUserStatus(userName, sendResponse) {
       const tabLoadListener = (tabId, changeInfo, tab) => {
         if (tabId === currentTab.id && changeInfo.status === 'complete' && tab.url.includes('reddit.com')) {
           chrome.tabs.onUpdated.removeListener(tabLoadListener)
-          console.log(`[BG] Tab ${tabId} navigated to Reddit, starting automation`)
+          bgLogger.log(`[BG] Tab ${tabId} navigated to Reddit, starting automation`)
           startAutomationForTab(tabId, userName)
         }
       }
       chrome.tabs.onUpdated.addListener(tabLoadListener)
     } else {
-      console.log(`[BG] Tab ${tabId} already on Reddit, starting automation immediately`)
+      bgLogger.log(`[BG] Tab ${tabId} already on Reddit, starting automation immediately`)
       startAutomationForTab(tabId, userName)
     }
 
@@ -1252,7 +1257,7 @@ export async function handleCheckUserStatus(userName, sendResponse) {
       userName: userName
     })
   } catch (error) {
-    console.error('[BG] Failed to start user status check automation:', error)
+    bgLogger.error('[BG] Failed to start user status check automation:', error)
     sendResponse({
       success: false,
       error: error.message,
@@ -1265,18 +1270,18 @@ export async function handleCheckUserStatus(userName, sendResponse) {
  * Handle close current tab request
  */
 export async function handleCloseCurrentTab(tabId, sendResponse) {
-  console.log(`[BG] Request to close tab ${tabId}`)
+  bgLogger.log(`[BG] Request to close tab ${tabId}`)
 
   try {
     if (tabId) {
       await chrome.tabs.remove(tabId)
-      console.log(`[BG] Successfully closed tab ${tabId}`)
+      bgLogger.log(`[BG] Successfully closed tab ${tabId}`)
       sendResponse({ success: true })
     } else {
       sendResponse({ success: false, error: 'No tabId provided for CLOSE_CURRENT_TAB' })
     }
   } catch (error) {
-    console.error('[BG] Failed to close tab:', error)
+    bgLogger.error('[BG] Failed to close tab:', error)
     sendResponse({ success: false, error: error.message })
   }
 }
@@ -1285,7 +1290,7 @@ export async function handleCloseCurrentTab(tabId, sendResponse) {
  * Handle profile data stored notification
  */
 export function handleProfileDataStored(username, postsCount, sendResponse) {
-  console.log(`[BG] Profile data stored for ${username} with ${postsCount} posts`)
+  bgLogger.log(`[BG] Profile data stored for ${username} with ${postsCount} posts`)
   chrome.action.setBadgeText({ text: '👤' })
   chrome.action.setBadgeBackgroundColor({ color: '#4caf50' })
   setTimeout(() => { chrome.action.setBadgeText({ text: '' }) }, 3000)
@@ -1296,7 +1301,7 @@ export function handleProfileDataStored(username, postsCount, sendResponse) {
  * Handle toggle auto-run settings
  */
 export async function handleToggleAutoRun(scriptType, enabled, sendResponse) {
-  console.log(`[BG] Toggling auto-run for ${scriptType}: ${enabled}`)
+  bgLogger.log(`[BG] Toggling auto-run for ${scriptType}: ${enabled}`)
 
   try {
     const result = await chrome.storage.sync.get(['autoRunSettings'])
@@ -1312,11 +1317,11 @@ export async function handleToggleAutoRun(scriptType, enabled, sendResponse) {
     }
 
     await chrome.storage.sync.set({ autoRunSettings: settings })
-    console.log('[BG] Auto-run settings updated:', settings)
+    bgLogger.log('[BG] Auto-run settings updated:', settings)
 
     sendResponse({ success: true, settings })
   } catch (error) {
-    console.error('[BG] Failed to toggle auto-run:', error)
+    bgLogger.error('[BG] Failed to toggle auto-run:', error)
     sendResponse({ success: false, error: error.message })
   }
 }
@@ -1325,7 +1330,7 @@ export async function handleToggleAutoRun(scriptType, enabled, sendResponse) {
  * Handle manual script trigger from popup
  */
 export async function handleTriggerScriptManual(scriptType, tabId, sendResponse) {
-  console.log(`[BG] Manual trigger for ${scriptType} on tab ${tabId}`)
+  bgLogger.log(`[BG] Manual trigger for ${scriptType} on tab ${tabId}`)
 
   try {
     if (scriptType === 'profile') {
@@ -1346,7 +1351,7 @@ export async function handleTriggerScriptManual(scriptType, tabId, sendResponse)
 
       sendResponse({ success: true, message: `Manual ${scriptType} script triggered` })
     } else if (scriptType === 'post') {
-      console.log('[BG] Creating new post tab for manual trigger')
+      bgLogger.log('[BG] Creating new post tab for manual trigger')
 
       const userResult = await chrome.storage.sync.get(['redditUser'])
       const userName = userResult.redditUser?.seren_name || 'User'
@@ -1369,7 +1374,7 @@ export async function handleTriggerScriptManual(scriptType, tabId, sendResponse)
       sendResponse({ success: false, error: 'Unknown script type' })
     }
   } catch (error) {
-    console.error('[BG] Failed to trigger manual script:', error)
+    bgLogger.error('[BG] Failed to trigger manual script:', error)
     sendResponse({ success: false, error: error.message })
   }
 }
@@ -1378,7 +1383,7 @@ export async function handleTriggerScriptManual(scriptType, tabId, sendResponse)
  * Handle create post tab request from content script
  */
 export async function handleCreatePostTab(postData, sendResponse) {
-  console.log('[BG] Creating new post tab from content script request')
+  bgLogger.log('[BG] Creating new post tab from content script request')
 
   try {
     const syncResult = await chrome.storage.sync.get(['redditUser'])
@@ -1388,14 +1393,15 @@ export async function handleCreatePostTab(postData, sendResponse) {
 
     let freshPostData
     if (redditUser && redditUser.seren_name) {
-      console.log(`[BG] Generating fresh post data for user: ${redditUser.seren_name}`)
+      bgLogger.log(`[BG] Generating fresh post data for user: ${redditUser.seren_name}`)
       freshPostData = await PostDataService.generatePost(redditUser.seren_name)
     } else {
-      console.log('[BG] No username found, using dummy post data')
-      freshPostData = PostDataService.generateDummyPost()
+      const errorMessage = 'No username found - cannot generate post without user context'
+      bgLogger.error('[BG] ' + errorMessage)
+      throw new Error(errorMessage)
     }
 
-    console.log('[BG] Using fresh API-generated post data:', freshPostData)
+    bgLogger.log('[BG] Using fresh API-generated post data:', freshPostData)
 
     const newTabId = await createCleanPostTab(userName, freshPostData)
 
@@ -1405,7 +1411,7 @@ export async function handleCreatePostTab(postData, sendResponse) {
       tabId: newTabId
     })
   } catch (error) {
-    console.error('[BG] Failed to create post tab from content script:', error)
+    bgLogger.error('[BG] Failed to create post tab from content script:', error)
     sendResponse({
       success: false,
       error: error.message
@@ -1417,7 +1423,7 @@ export async function handleCreatePostTab(postData, sendResponse) {
  * Handle get tab state request from content script
  */
 export async function handleGetTabState(tabId, sendResponse) {
-  console.log(`[BG] Getting tab state for tab ${tabId}`)
+  bgLogger.log(`[BG] Getting tab state for tab ${tabId}`)
 
   try {
     const state = tabStates[tabId]
@@ -1429,7 +1435,7 @@ export async function handleGetTabState(tabId, sendResponse) {
       state: state
     })
   } catch (error) {
-    console.error('[BG] Failed to get tab state:', error)
+    bgLogger.error('[BG] Failed to get tab state:', error)
     sendResponse({ success: false, error: error.message })
   }
 }
@@ -1438,8 +1444,8 @@ export async function handleGetTabState(tabId, sendResponse) {
  * Handle reuse reddit tab request from popup
  */
 export async function handleReuseRedditTab(targetUrl, action, sendResponse) {
-  console.log(`[BG] Reusing reddit tab for action:`, action)
-  console.log(`[BG] Target URL: ${targetUrl}`)
+  bgLogger.log(`[BG] Reusing reddit tab for action:`, action)
+  bgLogger.log(`[BG] Target URL: ${targetUrl}`)
 
   try {
     const existingTabs = await chrome.tabs.query({ url: '*://*.reddit.com/*' })
@@ -1450,14 +1456,14 @@ export async function handleReuseRedditTab(targetUrl, action, sendResponse) {
       const inactiveTab = existingTabs.find((tab) => !tab.active)
       targetTab = inactiveTab || existingTabs[0]
 
-      console.log(`[BG] Reusing existing tab ${targetTab.id} for action, navigating to ${targetUrl}`)
+      bgLogger.log(`[BG] Reusing existing tab ${targetTab.id} for action, navigating to ${targetUrl}`)
 
       await chrome.tabs.update(targetTab.id, {
         url: targetUrl,
         active: true
       })
     } else {
-      console.log(`[BG] No existing reddit.com tabs found, creating new tab with URL: ${targetUrl}`)
+      bgLogger.log(`[BG] No existing reddit.com tabs found, creating new tab with URL: ${targetUrl}`)
       targetTab = await chrome.tabs.create({
         url: targetUrl,
         active: true
@@ -1468,32 +1474,32 @@ export async function handleReuseRedditTab(targetUrl, action, sendResponse) {
       if (tabId === targetTab.id && changeInfo.status === 'complete') {
         chrome.tabs.onUpdated.removeListener(tabLoadListener)
 
-        console.log(`[BG] Tab ${targetTab.id} loaded, waiting for content script to be ready...`)
+        bgLogger.log(`[BG] Tab ${targetTab.id} loaded, waiting for content script to be ready...`)
 
         // Wait for content script to be ready before sending the action
         waitForContentScript(targetTab.id, { retries: 15, initialDelayMs: 500 })
           .then((ready) => {
             if (!ready) {
-              console.error(`[BG] ❌ Content script not ready in tab ${targetTab.id} after retries`)
+              bgLogger.error(`[BG] ❌ Content script not ready in tab ${targetTab.id} after retries`)
               return
             }
 
-            console.log(`[BG] ✅ Content script ready in tab ${targetTab.id}, sending action: ${action.type}`)
+            bgLogger.log(`[BG] ✅ Content script ready in tab ${targetTab.id}, sending action: ${action.type}`)
 
             try {
               chrome.tabs.sendMessage(targetTab.id, action)
                 .then(() => {
-                  console.log(`[BG] ✅ Action ${action.type} sent successfully to tab ${targetTab.id}`)
+                  bgLogger.log(`[BG] ✅ Action ${action.type} sent successfully to tab ${targetTab.id}`)
                 })
                 .catch((err) => {
-                  console.error(`[BG] ❌ Failed to send action to tab ${targetTab.id}:`, err)
+                  bgLogger.error(`[BG] ❌ Failed to send action to tab ${targetTab.id}:`, err)
                 })
             } catch (err) {
-              console.error(`[BG] ❌ Error sending action to tab ${targetTab.id}:`, err)
+              bgLogger.error(`[BG] ❌ Error sending action to tab ${targetTab.id}:`, err)
             }
           })
           .catch((err) => {
-            console.error(`[BG] ❌ Error waiting for content script:`, err)
+            bgLogger.error(`[BG] ❌ Error waiting for content script:`, err)
           })
       }
     }
@@ -1506,7 +1512,30 @@ export async function handleReuseRedditTab(targetUrl, action, sendResponse) {
       tabId: targetTab.id
     })
   } catch (error) {
-    console.error('[BG] Failed to reuse reddit tab:', error)
+    bgLogger.error('[BG] Failed to reuse reddit tab:', error)
     sendResponse({ success: false, error: error.message })
+  }
+}
+
+/**
+ * Handle open extension request from content scripts
+ * Opens or focuses the extension's single UI tab
+ */
+export async function handleOpenExtension(sendResponse) {
+  bgLogger.log('[BG] Opening/focusing extension UI tab')
+
+  try {
+    const tabId = await openOrFocusExtensionTab()
+    sendResponse({
+      success: true,
+      message: 'Extension tab opened/focused',
+      tabId: tabId
+    })
+  } catch (error) {
+    bgLogger.error('[BG] Failed to open extension tab:', error)
+    sendResponse({
+      success: false,
+      error: error.message
+    })
   }
 }

@@ -3,31 +3,30 @@
   "name": "Reddit Post Machine",
   "version": "1.0.0",
   "description": "Automated Reddit posting tool built with Quasar Framework",
-  
+
   "action": {
     "default_popup": "www/index.html#/popup",
     "default_title": "Reddit Post Machine",
     "default_icon": {
       "16": "icons/icon-16x16.png",
       "32": "icons/icon-32x32.png",
-      "48": "icons/icon-48x48.png",
       "128": "icons/icon-128x128.png"
     }
   },
-  
+
   "options_page": "www/index.html#/options",
-  
+
   "background": {
     "service_worker": "background.js"
   },
-  
+
   "content_scripts": [
     {
       "matches": ["*://www.reddit.com/*", "*://old.reddit.com/*"],
       "exclude_matches": [
-        "*://www.reddit.com/*/submit", 
-        "*://www.reddit.com/*/submit/*", 
-        "*://old.reddit.com/*/submit", 
+        "*://www.reddit.com/*/submit",
+        "*://www.reddit.com/*/submit/*",
+        "*://old.reddit.com/*/submit",
         "*://old.reddit.com/*/submit/*"
       ],
       "js": ["my-content-script.js", "stats-content-script.js"],
@@ -39,26 +38,25 @@
       "run_at": "document_start"
     }
   ],
-  
+
   "permissions": [
     "storage",
     "tabs",
     "activeTab"
   ],
-  
+
   "host_permissions": [
     "*://www.reddit.com/*",
     "*://old.reddit.com/*",
     "https://dev.slife.guru/*"
   ],
-  
+
   "icons": {
     "16": "icons/icon-16x16.png",
     "32": "icons/icon-32x32.png",
-    "48": "icons/icon-48x48.png",
     "128": "icons/icon-128x128.png"
   },
-  
+
   "web_accessible_resources": [
     {
       "resources": ["icons/*", "dom.js"],

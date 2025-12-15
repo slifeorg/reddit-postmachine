@@ -13,7 +13,7 @@
       >
         <q-tooltip>Create New Post</q-tooltip>
       </q-btn>
-      
+
       <q-btn
         v-if="storedUsername"
         round
@@ -24,12 +24,29 @@
         class="shadow-2"
       >
         <q-tooltip>Check User Status</q-tooltip>
+
       </q-btn>
+		  <q-btn
+        v-if="storedUsername"
+        class="round"
+        color="negative"
+        icon="delete"
+        @click="deleteLastPost"
+      />
+		<q-btn
+        v-if="storedUsername"
+        class="full-width q-mt-sm"
+        color="primary"
+        icon="play_arrow"
+        label="Auto Flow"
+        @click="startAutoFlow"
+      />
+
     </div>
 
     <div class="text-center q-mb-md">
-      <q-avatar size="60px" class="q-mb-sm">
-      </q-avatar>
+<!--      <q-avatar size="60px" class="q-mb-sm">-->
+<!--      </q-avatar>-->
 
       <!-- Show username if available, otherwise show app name -->
       <div v-if="storedUsername" class="text-h6 text-primary">{{ storedUsername }}</div>
@@ -62,21 +79,6 @@
         label="Detect Reddit User"
         @click="detectUser"
       />
-
-
-
-
-      <q-btn
-        v-if="storedUsername"
-        class="full-width q-mt-sm"
-        color="primary"
-        icon="play_arrow"
-        label="Start Auto Flow"
-        @click="startAutoFlow"
-      />
-
-     
-
       <!-- Display auto-flow decision report if available -->
       <div v-if="decisionReport" class="q-mt-sm">
         <q-card class="q-pa-sm decision-card">
@@ -90,12 +92,12 @@
               <div v-if="decisionReport.lastPostAge !== null" class="decision-item">
                 <strong>Last Post Age:</strong> {{ decisionReport.lastPostAge }} hours ago
               </div>
-              <div class="decision-item"><strong>Last Post Status:</strong> 
+              <div class="decision-item"><strong>Last Post Status:</strong>
                 <span :class="getStatusClass(decisionReport.lastPostStatus)">
                   {{ formatStatus(decisionReport.lastPostStatus) }}
                 </span>
               </div>
-              <div class="decision-item"><strong>Decision:</strong> 
+              <div class="decision-item"><strong>Decision:</strong>
                 <span :class="getDecisionClass(decisionReport.decision)">
                   {{ formatDecision(decisionReport.decision) }}
                 </span>
@@ -118,12 +120,12 @@
               Auto-Flow Execution Results
             </div>
             <div class="text-body2 q-mt-xs">
-              <div class="execution-item"><strong>Action Taken:</strong> 
+              <div class="execution-item"><strong>Action Taken:</strong>
                 <span :class="getExecutionStatusClass(executionResult.status)">
                   {{ formatExecutionStatus(executionResult.status) }}
                 </span>
               </div>
-              <div class="execution-item"><strong>Post Result:</strong> 
+              <div class="execution-item"><strong>Post Result:</strong>
                 <span :class="getPostResultClass(executionResult.postResult)">
                   {{ formatPostResult(executionResult.postResult) }}
                 </span>
@@ -142,14 +144,7 @@
         </q-card>
       </div>
 
-      <q-btn
-        v-if="storedUsername"
-        class="full-width"
-        color="negative"
-        icon="delete"
-        label="Delete Last Post"
-        @click="deleteLastPost"
-      />
+
 
 
       <q-separator class="q-my-md" />
@@ -365,7 +360,7 @@ export default defineComponent({
     const getDecisionCardClass = (decision) => {
       const classMap = {
         'no_create': 'status-success',
-        'create': 'status-warning', 
+        'create': 'status-warning',
         'create_with_delete': 'status-error'
       }
       return classMap[decision] || ''
@@ -523,31 +518,31 @@ export default defineComponent({
     if (typeof chrome !== 'undefined' && chrome.storage) {
       chrome.storage.onChanged.addListener((changes, area) => {
         console.log('Popup: Storage changed:', Object.keys(changes), 'Area:', area);
-        
+
         if (changes.redditUser && changes.redditUser.newValue && changes.redditUser.newValue.seren_name) {
           storedUsername.value = changes.redditUser.newValue.seren_name
           console.log('Popup: Username updated via storage listener:', changes.redditUser.newValue.seren_name)
         }
-        
+
         if (changes.userStatus && changes.userStatus.newValue) {
           userStatus.value = changes.userStatus.newValue
           console.log('Popup: User status updated via storage listener:', changes.userStatus.newValue)
         }
-        
+
         // Listen for latestPostsData changes in local storage
         if (area === 'local' && changes.latestPostsData && changes.latestPostsData.newValue) {
           postsData.value = changes.latestPostsData.newValue;
           console.log('Popup: Posts data updated via storage listener');
           console.log('Popup: New posts data:', changes.latestPostsData.newValue);
         }
-        
+
         // Listen for decision report changes in local storage
         if (area === 'local' && changes.lastDecisionReport && changes.lastDecisionReport.newValue) {
           decisionReport.value = changes.lastDecisionReport.newValue;
           console.log('Popup: Decision report updated via storage listener');
           console.log('Popup: New decision report:', changes.lastDecisionReport.newValue);
         }
-        
+
         // Listen for execution result changes in local storage
         if (area === 'local' && changes.lastExecutionResult && changes.lastExecutionResult.newValue) {
           executionResult.value = changes.lastExecutionResult.newValue;
@@ -556,7 +551,7 @@ export default defineComponent({
         }
       })
     }
-    
+
     // Manual refresh function for debugging
     const refreshPostsData = () => {
         console.log('Popup: Manual refresh triggered');
@@ -664,7 +659,7 @@ export default defineComponent({
       try {
         // Get current tab and send delete message directly
         const currentTab = await getCurrentTab()
-        
+
         if (currentTab.url && currentTab.url.includes('reddit.com')) {
           console.log('Sending delete message to current tab:', currentTab.id)
           chrome.tabs.sendMessage(currentTab.id, {
@@ -793,7 +788,7 @@ export default defineComponent({
         errorMessage: null,
         timestamp: Date.now()
       }
-      
+
       try {
         await chrome.storage.local.set({ lastExecutionResult: mockResult })
         console.log('Test execution result saved:', mockResult)

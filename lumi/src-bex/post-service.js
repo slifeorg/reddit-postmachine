@@ -1,4 +1,4 @@
-/**
+import { postServiceLogger } from "./logger.js";/**
  * Post Service Module
  * Handles post generation, API integration, and post creation decision logic
  */
@@ -16,7 +16,7 @@ export class PostDataService {
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        console.log(
+        postServiceLogger.log(
           `[PostDataService] Generating post for agent: ${agentName} (attempt ${attempt}/${maxRetries})`
         )
 
@@ -28,27 +28,45 @@ export class PostDataService {
           token: '8fbbf0a7c626e18:e8e4a08a650a5fb'
         }
 
+        const requestBody = {
+          agent_name: agentName
+        }
+
+        postServiceLogger.log('[PostDataService] API Request Details:', {
+          endpoint: apiConfig.endpoint,
+          agentName: agentName,
+          body: requestBody
+        })
+
         const response = await fetch(apiConfig.endpoint, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             Authorization: `token ${apiConfig.token}`
           },
-          body: JSON.stringify({
-            agent_name: agentName.replace(/^u\\/, '')
-          })
+          body: JSON.stringify(requestBody)
         })
 
-        if (!response.ok) {
-          throw new Error(`API request failed: ${response.status} ${response.statusText}`)
+        let data
+        try {
+          data = await response.json()
+        } catch (e) {
+          postServiceLogger.error('[PostDataService] Failed to parse response as JSON:', e)
+          throw new Error(`API request failed: ${response.status} ${response.statusText} - Invalid JSON response`)
         }
 
-        const data = await response.json()
-        console.log('[PostDataService] Generated post from API:', data)
+        if (!response.ok) {
+          let errorDetails = `${response.status} ${response.statusText}`
+          postServiceLogger.error('[PostDataService] API Error Response:', data)
+          errorDetails += ` - ${JSON.stringify(data)}`
+          throw new Error(`API request failed: ${errorDetails}`)
+        }
+
+        postServiceLogger.log('[PostDataService] Generated post from API:', data)
 
         // Handle new API response format with post_name
         if (data && data.message && data.message.status === 'success' && data.message.post_name) {
-          console.log('[PostDataService] Received post_name, fetching full post data:', data.message.post_name)
+          postServiceLogger.log('[PostDataService] Received post_name, fetching full post data:', data.message.post_name)
 
           // Second API call to get full post data using Frappe REST API
           const postName = data.message.post_name
@@ -67,7 +85,7 @@ export class PostDataService {
           }
 
           const frappeData = await frappeResponse.json()
-          console.log('[PostDataService] Fetched full post data from Frappe:', frappeData)
+          postServiceLogger.log('[PostDataService] Fetched full post data from Frappe:', frappeData)
 
           // Extract post data from Frappe response
           if (frappeData && frappeData.data) {
@@ -105,12 +123,13 @@ export class PostDataService {
 
         throw new Error('Invalid API response structure or no post data returned')
       } catch (error) {
-        console.error(`[PostDataService] API call failed (attempt ${attempt}/${maxRetries}):`, error)
+        postServiceLogger.error(`[PostDataService] API call failed (attempt ${attempt}/${maxRetries}):`, error)
 
         if (attempt === maxRetries) {
-          // Final attempt failed, use fallback
-          console.log('[PostDataService] All API attempts failed, using fallback dummy post')
-          return this.generateDummyPost()
+          // Final attempt failed, throw error instead of using fallback
+          const errorMessage = `Failed to generate post after ${maxRetries} attempts: ${error.message}`
+          postServiceLogger.error('[PostDataService] ' + errorMessage)
+          throw new Error(errorMessage)
         }
 
         // Wait before retry with exponential backoff
@@ -148,12 +167,12 @@ export class PostDataService {
       lastPost: postsData?.lastPost || null
     }
 
-    console.log('=== AUTO-FLOW DECISION ANALYSIS ===')
-    console.log(`[PostDataService] Analyzing ${decisionReport.totalPosts} posts for auto-flow decision`)
+    postServiceLogger.log('=== AUTO-FLOW DECISION ANALYSIS ===')
+    postServiceLogger.log(`[PostDataService] Analyzing ${decisionReport.totalPosts} posts for auto-flow decision`)
 
     // Analyze posts to determine if new post is needed
     if (!postsData || !postsData.postsInfo || !postsData.postsInfo.posts || postsData.postsInfo.posts.length === 0) {
-      console.log('[PostDataService] ❌ DECISION: No posts found, should create new post')
+      postServiceLogger.log('[PostDataService] ❌ DECISION: No posts found, should create new post')
       decisionReport.decision = 'create'
       decisionReport.reason = 'no_posts'
       this.saveDecisionReport(decisionReport)
@@ -169,31 +188,41 @@ export class PostDataService {
     const ageInHours = (now - postDate) / (1000 * 60 * 60)
     decisionReport.lastPostAge = Math.round(ageInHours * 10) / 10 // Round to 1 decimal
 
-    console.log(`[PostDataService] 📊 Enhanced last post details:`)
-    console.log(`   - Title: "${lastPost.title || 'No title'}"`)
-    console.log(`   - Age: ${decisionReport.lastPostAge} hours ago`)
-    console.log(`   - URL: ${lastPost.url || 'No URL'}`)
-    console.log(`   - Author: ${lastPost.author || 'Unknown'}`)
-    console.log(`   - Subreddit: ${lastPost.subreddit || 'Unknown'}`)
-    console.log(
+    postServiceLogger.log(`[PostDataService] 📊 Enhanced last post details:`)
+    postServiceLogger.log(`   - Title: "${lastPost.title || 'No title'}"`)
+    postServiceLogger.log(`   - Age: ${decisionReport.lastPostAge} hours ago`)
+    postServiceLogger.log(`   - URL: ${lastPost.url || 'No URL'}`)
+    postServiceLogger.log(`   - Author: ${lastPost.author || 'Unknown'}`)
+    postServiceLogger.log(`   - Subreddit: ${lastPost.subreddit || 'Unknown'}`)
+    postServiceLogger.log(
       `   - Score: ${lastPost.score || 0} | Comments: ${lastPost.commentCount || 0} | Awards: ${lastPost.awardCount || 0}`
     )
-    console.log(
+    postServiceLogger.log(
       `   - Post Type: ${lastPost.postType || 'Unknown'} | Domain: ${lastPost.domain || 'N/A'}`
     )
-    console.log(
+    postServiceLogger.log(
       `   - Status: Removed=${lastPost.isRemoved}, Blocked=${lastPost.isBlocked}, Deleted=${lastPost.deleted}`
     )
-    console.log(
+    postServiceLogger.log(
       `   - Item State: ${lastPost.itemState || 'Unknown'} | View Context: ${lastPost.viewContext || 'Unknown'}`
     )
 
     // Enhanced decision logic using new metadata
 
-    // Priority 1: Check if post is in UNMODERATED state - wait for moderation
+    // Priority 1: Check if last post is removed or blocked by moderators - HIGHEST PRIORITY
+    if (lastPost.isRemoved || lastPost.isBlocked || lastPost.hasModeratorAction) {
+      postServiceLogger.log('[PostDataService] 🚫 DECISION: Last post was removed/blocked/moderated, should create new post and delete it')
+      decisionReport.decision = 'create_with_delete'
+      decisionReport.reason = 'post_removed'
+      decisionReport.lastPostStatus = lastPost.isRemoved ? 'removed' : lastPost.isBlocked ? 'blocked' : 'moderated'
+      this.saveDecisionReport(decisionReport)
+      return { shouldCreate: true, reason: 'post_removed', lastPost: lastPost, decisionReport }
+    }
+
+    // Priority 2: Check if post is in UNMODERATED state - wait for moderation (only if not removed/blocked)
     if (lastPost.itemState === 'UNMODERATED') {
       if (ageInHours <= 1) {
-        console.log('[PostDataService] ⏳ DECISION: Last post is under moderation review, should wait')
+        postServiceLogger.log('[PostDataService] ⏳ DECISION: Last post is under moderation review, should wait')
         decisionReport.decision = 'wait'
         decisionReport.reason = 'under_moderation'
         decisionReport.lastPostStatus = 'unmoderated'
@@ -201,7 +230,7 @@ export class PostDataService {
         return { shouldCreate: false, reason: 'under_moderation', lastPost: lastPost, decisionReport }
       }
 
-      console.log(
+      postServiceLogger.log(
         '[PostDataService] ⏰ DECISION: Last post is still unmoderated but older than 1 hour, should create new post'
       )
       decisionReport.decision = 'create'
@@ -211,9 +240,9 @@ export class PostDataService {
       return { shouldCreate: true, reason: 'stale_unmoderated', lastPost: lastPost, decisionReport }
     }
 
-    // Priority 2: Check if last post has negative score (downvotes)
+    // Priority 3: Check if last post has negative score (downvotes)
     if (lastPost.score < 0) {
-      console.log('[PostDataService] 👎 DECISION: Last post has negative score, should create new post and delete downvoted post')
+      postServiceLogger.log('[PostDataService] 👎 DECISION: Last post has negative score, should create new post and delete downvoted post')
       decisionReport.decision = 'create_with_delete'
       decisionReport.reason = 'post_downvoted'
       decisionReport.lastPostStatus = lastPost.isRemoved ? 'removed' : lastPost.isBlocked ? 'blocked' : 'downvoted'
@@ -221,18 +250,8 @@ export class PostDataService {
       return { shouldCreate: true, reason: 'post_downvoted', lastPost: lastPost, decisionReport }
     }
 
-    // Priority 4: Check if last post is removed or blocked by moderators
-    if (lastPost.isRemoved || lastPost.isBlocked || lastPost.hasModeratorAction) {
-      console.log('[PostDataService] 🚫 DECISION: Last post was removed/blocked, should create new post and delete removed post')
-      decisionReport.decision = 'create_with_delete'
-      decisionReport.reason = 'post_removed'
-      decisionReport.lastPostStatus = lastPost.isRemoved ? 'removed' : lastPost.isBlocked ? 'blocked' : 'moderated'
-      this.saveDecisionReport(decisionReport)
-      return { shouldCreate: true, reason: 'post_removed', lastPost: lastPost, decisionReport }
-    }
-
     if (ageInHours < 24) {
-      console.log('[PostDataService] ✅ DECISION: Last post is recent (< 24h), skipping engagement-based creation')
+      postServiceLogger.log('[PostDataService] ✅ DECISION: Last post is recent (< 24h), skipping engagement-based creation')
       decisionReport.decision = 'no_create'
       decisionReport.reason = 'recent_post'
       decisionReport.lastPostStatus = 'active'
@@ -243,7 +262,7 @@ export class PostDataService {
     // Priority 5: Check if last post has very low engagement (score + comments)
     const totalEngagement = (lastPost.score || 0) + (lastPost.commentCount || 0)
     if (totalEngagement < 2) {
-      console.log(
+      postServiceLogger.log(
         '[PostDataService] 📉 DECISION: Last post has very low engagement (< 2), should create new post and delete low-performing post'
       )
       decisionReport.decision = 'create_with_delete'
@@ -255,7 +274,7 @@ export class PostDataService {
 
     // Check if last post is older than one week - if so, DO NOT delete it, just create new post
     if (postDate < oneWeekAgo) {
-      console.log('[PostDataService] ⏰ DECISION: Last post is older than one week, should create new post without deletion')
+      postServiceLogger.log('[PostDataService] ⏰ DECISION: Last post is older than one week, should create new post without deletion')
       decisionReport.decision = 'create'
       decisionReport.reason = 'old_post'
       decisionReport.lastPostStatus = lastPost.isRemoved ? 'removed' : lastPost.isBlocked ? 'blocked' : 'active'
@@ -263,31 +282,7 @@ export class PostDataService {
       return { shouldCreate: true, reason: 'old_post', lastPost: lastPost, decisionReport }
     }
 
-    // Priority 6: Check if last post is blocked or removed by moderator
-    if (lastPost.isBlocked || lastPost.isRemoved || lastPost.deleted) {
-      const status = lastPost.isRemoved ? 'removed' : lastPost.isBlocked ? 'blocked' : 'deleted'
-
-      // Check if the removed/blocked post is older than one week - if so, preserve it
-      if (postDate < oneWeekAgo) {
-        console.log(
-          `[PostDataService] 🚫 DECISION: Last post is ${status} by moderator but older than one week, should create new post without deletion`
-        )
-        decisionReport.decision = 'create'
-        decisionReport.reason = 'old_post'
-        decisionReport.lastPostStatus = status
-        this.saveDecisionReport(decisionReport)
-        return { shouldCreate: true, reason: 'old_post', lastPost: lastPost, decisionReport }
-      }
-
-      console.log(`[PostDataService] 🚫 DECISION: Last post is ${status} by moderator, should create new post and delete it`)
-      decisionReport.decision = 'create_with_delete'
-      decisionReport.reason = 'post_blocked'
-      decisionReport.lastPostStatus = status
-      this.saveDecisionReport(decisionReport)
-      return { shouldCreate: true, reason: 'post_blocked', lastPost: lastPost, decisionReport }
-    }
-
-    console.log('[PostDataService] ✅ DECISION: Last post is recent and active, no new post needed')
+    postServiceLogger.log('[PostDataService] ✅ DECISION: Last post is recent and active, no new post needed')
     decisionReport.decision = 'no_create'
     decisionReport.reason = 'recent_post'
     decisionReport.lastPostStatus = 'active'
@@ -302,9 +297,9 @@ export class PostDataService {
         lastDecisionReport: decisionReport,
         lastDecisionTimestamp: decisionReport.timestamp
       })
-      console.log('[PostDataService] 💾 Decision report saved to storage:', decisionReport.decision)
+      postServiceLogger.log('[PostDataService] 💾 Decision report saved to storage:', decisionReport.decision)
     } catch (error) {
-      console.error('[PostDataService] Failed to save decision report:', error)
+      postServiceLogger.error('[PostDataService] Failed to save decision report:', error)
     }
   }
 
@@ -315,42 +310,13 @@ export class PostDataService {
         lastExecutionResult: executionResult,
         lastExecutionTimestamp: executionResult.timestamp
       })
-      console.log('[PostDataService] 💾 Execution result saved to storage:', executionResult.status, '-', executionResult.postResult)
+      postServiceLogger.log('[PostDataService] 💾 Execution result saved to storage:', executionResult.status, '-', executionResult.postResult)
     } catch (error) {
-      console.error('[PostDataService] Failed to save execution result:', error)
+      postServiceLogger.error('[PostDataService] Failed to save execution result:', error)
     }
   }
 
-  // Keep dummy method as fallback
-  static generateDummyPost() {
-    const posts = [
-      {
-        title: 'Amazing sphynx kittens are ready to steal your heart! 🐱',
-        body: '#shorts #sphynx #missmermaid #kitten #cat #adorable',
-        url: 'https://youtube.com/shorts/0xmhrS_VNNY?si=awYc8i5YljycesXq',
-        subreddit: 'sphynx',
-        post_type: 'link'
-      },
-      {
-        title: 'Cute sphynx babies capture your heart',
-        body: '#shorts #sphynx #missmermaid #kitten #cat #love',
-        url: 'https://youtube.com/shorts/dQw4w9WgXcQ?si=randomstring',
-        subreddit: 'sphynx',
-        post_type: 'link'
-      },
-      {
-        title: 'Hairless beauties showing their playful side! 🎭',
-        body: '#shorts #sphynx #missmermaid #playful #cats #funny',
-        url: 'https://youtube.com/shorts/playful123?si=example',
-        subreddit: 'sphynx',
-        post_type: 'link'
-      }
-    ]
 
-    const randomPost = posts[Math.floor(Math.random() * posts.length)]
-    console.log('[PostDataService] Generated dummy post:', randomPost.title)
-    return randomPost
-  }
 }
 
 /**
@@ -358,7 +324,7 @@ export class PostDataService {
  * Orchestrates post fetching and decision making
  */
 export async function fetchNextPost() {
-  console.log('[BG] Checking for new posts to create (API service)...')
+  postServiceLogger.log('[BG] Checking for new posts to create (API service)...')
 
   try {
     // Get stored username to use as agent name
@@ -367,24 +333,25 @@ export async function fetchNextPost() {
     const redditUser = syncResult.redditUser || localResult.redditUser
 
     if (!redditUser || !redditUser.seren_name) {
-      console.log('[BG] No username found, skipping API call')
+      postServiceLogger.log('[BG] No username found, skipping API call')
       return null
     }
 
     const agentName = redditUser.seren_name
-    console.log(`[BG] Using agent name: ${agentName}`)
+    const cleanAgentName = agentName.replace(/^u\//, '')
+    postServiceLogger.log(`[BG] Using agent name: ${agentName} (cleaned: ${cleanAgentName})`)
 
     // Check if we should create a post
     if (await PostDataService.shouldCreatePost({ userName: agentName })) {
-      const postData = await PostDataService.generatePost(agentName)
-      console.log('[BG] API service says: CREATE POST')
+      const postData = await PostDataService.generatePost(cleanAgentName)
+      postServiceLogger.log('[BG] API service says: CREATE POST')
       return postData
     }
 
-    console.log('[BG] API service says: NO POST NEEDED')
+    postServiceLogger.log('[BG] API service says: NO POST NEEDED')
     return null
   } catch (error) {
-    console.error('[BG] Error in fetchNextPost:', error)
+    postServiceLogger.error('[BG] Error in fetchNextPost:', error)
     return null
   }
 }

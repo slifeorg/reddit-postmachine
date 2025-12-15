@@ -3,9 +3,10 @@
  * This script runs in the context of web pages to handle DOM manipulation
  */
 import { bexDom } from 'quasar/wrappers'
+import { domLogger } from './logger.js'
 
 // Initialize DOM script
-console.log('Reddit Post Machine DOM script loaded')
+domLogger.log('Reddit Post Machine DOM script loaded')
 
 // DOM manipulation utilities for Reddit pages
 const RedditDOMHelper = {
@@ -67,19 +68,19 @@ const RedditDOMHelper = {
   },
 
   async clickTab(tabValue) {
-    console.log(`Clicking tab with data-select-value="${tabValue}"`)
+    domLogger.log(`Clicking tab with data-select-value="${tabValue}"`)
     const tab = this.deepQuery(`[data-select-value="${tabValue}"]`)
     if (tab) {
       tab.click()
       await this.sleep(2000)
       return true
     }
-    console.log(`Tab with data-select-value="${tabValue}" not found`)
+    domLogger.log(`Tab with data-select-value="${tabValue}" not found`)
     return false
   },
 
   async fillTitle(titleText) {
-    console.log('Filling title...')
+    domLogger.log('Filling title...')
     const titleInputElement = this.deepQuery('faceplate-textarea-input[name="title"]')
     if (titleInputElement) {
       const shadowRoot = titleInputElement.shadowRoot
@@ -91,18 +92,18 @@ const RedditDOMHelper = {
           titleInput.value = titleText
           titleInput.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }))
           titleInput.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }))
-          console.log('Title set')
+          domLogger.log('Title set')
           await this.sleep(1500)
           return true
         }
       }
     }
-    console.log('Failed to fill title')
+    domLogger.log('Failed to fill title')
     return false
   },
 
   async fillUrl(urlText) {
-    console.log('Filling URL...')
+    domLogger.log('Filling URL...')
     const urlInputElement = this.deepQuery('faceplate-textarea-input[name="link"]')
     if (urlInputElement) {
       const shadowRoot = urlInputElement.shadowRoot
@@ -114,23 +115,23 @@ const RedditDOMHelper = {
           urlInput.value = urlText
           urlInput.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }))
           urlInput.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }))
-          console.log('URL set')
+          domLogger.log('URL set')
           await this.sleep(1500)
           return true
         }
       }
     }
-    console.log('Failed to fill URL')
+    domLogger.log('Failed to fill URL')
     return false
   },
 
   async clickBodyField() {
-    console.log('Clicking body text field to activate Post button...')
+    domLogger.log('Clicking body text field to activate Post button...')
     const bodyComposer = this.deepQuery('shreddit-composer[name="optionalBody"]')
     if (bodyComposer) {
       const bodyEditable = bodyComposer.querySelector('div[contenteditable="true"][data-lexical-editor="true"]')
       if (bodyEditable) {
-        console.log('Found Lexical editor, clicking...')
+        domLogger.log('Found Lexical editor, clicking...')
         bodyEditable.click()
         await this.sleep(100)
         bodyEditable.focus()
@@ -142,17 +143,17 @@ const RedditDOMHelper = {
         return true
       }
     }
-    console.log('Body text field not found')
+    domLogger.log('Body text field not found')
     return false
   },
 
   async fillBodyText(bodyText) {
-    console.log('Filling body text...')
+    domLogger.log('Filling body text...')
     const bodyComposer = this.deepQuery('shreddit-composer[name="optionalBody"]')
     if (bodyComposer) {
       const bodyEditable = bodyComposer.querySelector('div[contenteditable="true"][data-lexical-editor="true"]')
       if (bodyEditable) {
-        console.log('Found Lexical editor, setting text...')
+        domLogger.log('Found Lexical editor, setting text...')
         bodyEditable.focus()
         await this.sleep(500)
         
@@ -199,18 +200,18 @@ const RedditDOMHelper = {
         }
 
         bodyEditable.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }))
-        console.log('Body text set successfully')
+        domLogger.log('Body text set successfully')
         await this.sleep(1500)
         return true
       }
     }
-    console.log('Failed to find body editor')
+    domLogger.log('Failed to find body editor')
     return false
   },
 
   // Main orchestrator for filling the form
   async fillPostForm(data) {
-    console.log('Starting robust form fill with Frappe model...', data)
+    domLogger.log('Starting robust form fill with Frappe model...', data)
     
     // Map Frappe fields to local variables
     const {
@@ -224,10 +225,10 @@ const RedditDOMHelper = {
     // 0. Select Subreddit (if provided)
     if (subreddit_name) {
         if (await this.selectSubreddit(subreddit_name)) {
-            console.log(`Subreddit ${subreddit_name} selected`);
+            domLogger.log(`Subreddit ${subreddit_name} selected`);
             await this.sleep(1000);
         } else {
-            console.warn(`Failed to select subreddit ${subreddit_name}`);
+            domLogger.warn(`Failed to select subreddit ${subreddit_name}`);
         }
     }
 
@@ -235,7 +236,7 @@ const RedditDOMHelper = {
     const isLinkPost = post_type === 'Link';
     const targetTab = isLinkPost ? 'LINK' : 'TEXT'
 
-    console.log(`Targeting ${targetTab} tab`)
+    domLogger.log(`Targeting ${targetTab} tab`)
     
     // 1. Select the correct tab
     if (await this.clickTab(targetTab)) {
@@ -255,14 +256,14 @@ const RedditDOMHelper = {
          await this.clickBodyField()
        }
 
-       console.log('Form fill sequence completed')
+       domLogger.log('Form fill sequence completed')
     } else {
-       console.error('Could not switch to target tab')
+       domLogger.error('Could not switch to target tab')
     }
   },
 
   async selectSubreddit(subredditName) {
-      console.log(`Selecting subreddit: ${subredditName}...`);
+      domLogger.log(`Selecting subreddit: ${subredditName}...`);
       
       // 1. Find the Search input for subreddit
       // Common selector on new reddit submit page
@@ -385,7 +386,7 @@ window.RedditDOMHelper = RedditDOMHelper
 
 // Export default BEX DOM hook
 export default bexDom((bridge) => {
-  console.log('Reddit Post Machine DOM script initialized')
+  domLogger.log('Reddit Post Machine DOM script initialized')
   
   // Bridge is available for communication with content script
   window.bridge = bridge
@@ -403,14 +404,14 @@ Object.assign(RedditDOMHelper, {
   },
 
   async openUserDropdown() {
-    console.log('Attempting to open user dropdown (robust)...');
+    domLogger.log('Attempting to open user dropdown (robust)...');
     
     // 1. Check if already open (optimization)
     const openMenu = this.qsAll('[role="menu"], [role="dialog"], faceplate-dropdown-menu').find(el => 
         this.isVisible(el) && el.textContent.toLowerCase().includes('profile')
     );
     if (openMenu) {
-        console.log('User menu appears to be already open');
+        domLogger.log('User menu appears to be already open');
         return true;
     }
 
@@ -432,7 +433,7 @@ Object.assign(RedditDOMHelper, {
         for (const el of candidates) {
             if (this.isVisible(el)) {
                 button = el;
-                console.log(`Found user menu button with selector: ${sel}`);
+                domLogger.log(`Found user menu button with selector: ${sel}`);
                 break;
             }
         }
@@ -447,7 +448,7 @@ Object.assign(RedditDOMHelper, {
     if (button) {
         // Check if it says it's already expanded
         if (button.getAttribute('aria-expanded') === 'true') {
-             console.log('Button says menu is already expanded');
+             domLogger.log('Button says menu is already expanded');
              return true;
         }
 
@@ -460,22 +461,22 @@ Object.assign(RedditDOMHelper, {
 
         // Attempt click with retry
         for (let i = 0; i < 2; i++) {
-            console.log(`Clicking user menu button (Attempt ${i+1}/2)...`);
+            domLogger.log(`Clicking user menu button (Attempt ${i+1}/2)...`);
             button.click();
             await this.sleep(2000);
             
             if (isMenuOpen()) {
-                console.log('User menu confirmed open.');
+                domLogger.log('User menu confirmed open.');
                 return true;
             }
-            console.log('🔄 Navigation fallback: User menu not detected open, retrying...');
+            domLogger.log('🔄 Navigation fallback: User menu not detected open, retrying...');
         }
         
-        console.log('🔄 Navigation fallback: Using direct URL navigation since menu approach failed');
+        domLogger.log('🔄 Navigation fallback: Using direct URL navigation since menu approach failed');
         return false;
     }
     
-    console.log('User dropdown button not found');
+    domLogger.log('User dropdown button not found');
     return false
   },
 
@@ -537,7 +538,7 @@ Object.assign(RedditDOMHelper, {
   },
 
   async navigateToUserProfile(username) {
-    console.log(`Navigating to user profile... Target: ${username}`)
+    domLogger.log(`Navigating to user profile... Target: ${username}`)
 
     // 0. Direct navigation if username is provided and we want to be safe
     // This mimics legacy behavior which was robust
@@ -548,7 +549,7 @@ Object.assign(RedditDOMHelper, {
     // 1. Try "View Profile" from User Dropdown (User request)
     // We wrap clicks in try-catch to ignore AbortError/Navigation interruption
     try {
-        console.log('Attempting User Dropdown -> View Profile flow')
+        domLogger.log('Attempting User Dropdown -> View Profile flow')
         if (await this.openUserDropdown()) {
             await this.sleep(2000)
             
@@ -567,7 +568,7 @@ Object.assign(RedditDOMHelper, {
                      
                      if (isProfileMatch) {
                           if (el.offsetParent === null && window.getComputedStyle(el).display === 'none') continue;
-                          console.log('Found potential View Profile element:', el);
+                          domLogger.log('Found potential View Profile element:', el);
                           return el.closest('a, button, div[role="menuitem"]') || el;
                      }
                 }
@@ -596,29 +597,29 @@ Object.assign(RedditDOMHelper, {
             }
 
             if (viewProfileEl) {
-                console.log('Found "View Profile" element, clicking...', viewProfileEl)
+                domLogger.log('Found "View Profile" element, clicking...', viewProfileEl)
                 viewProfileEl.click()
                 
                 // User Request: Wait for "Overview" element to appear
-                console.log('Waiting for "Overview" element to confirm profile load...');
+                domLogger.log('Waiting for "Overview" element to confirm profile load...');
                 // We use a broader search to catch explicit "Overview" tab or URL change evidence
                 const overviewEl = await this.waitForElement('[data-testid="profile-overview-tab"], a[href$="/overview/"], a[href$="/overview"]', 10000) ||
                                    await this.deepFindByText('Overview', 'a');
                 
                 if (overviewEl) {
-                     console.log('Profile loaded (Overview detected). Waiting 2s for stability...');
+                     domLogger.log('Profile loaded (Overview detected). Waiting 2s for stability...');
                      await this.sleep(2000);
                 } else {
-                     console.warn('Overview element not found after click. Proceeding with caution...');
+                     domLogger.warn('Overview element not found after click. Proceeding with caution...');
                      await this.sleep(4000); // Fallback to original sleep if detection fails
                 }
                 
                 return true
             }
-            console.log('"View Profile" link not found in dropdown.')
+            domLogger.log('"View Profile" link not found in dropdown.')
         }
     } catch (e) {
-        console.warn('Click navigation interrupted (likely success):', e);
+        domLogger.warn('Click navigation interrupted (likely success):', e);
         return true; 
     }
 
@@ -628,13 +629,13 @@ Object.assign(RedditDOMHelper, {
                             this.deepQuery('a[href^="/user/"][class*="avatar"]');
 
         if (profileLink) {
-            console.log('Found alternative profile link, clicking...')
+            domLogger.log('Found alternative profile link, clicking...')
             profileLink.click()
             await this.sleep(4000)
             return true
         }
     } catch (e) {
-         console.warn('Alternative link click interrupted:', e);
+         domLogger.warn('Alternative link click interrupted:', e);
          return true;
     }
 
@@ -642,11 +643,11 @@ Object.assign(RedditDOMHelper, {
     // 3. Ultimate Fallback: Direct URL Navigation
     if (cleanUsername) {
         try {
-            console.log('🔄 Navigation fallback: Using direct URL navigation since menu approach failed');
+            domLogger.log('🔄 Navigation fallback: Using direct URL navigation since menu approach failed');
             window.location.href = `https://www.reddit.com/user/${cleanUsername}`;
             await this.sleep(5000); // Wait for reload
         } catch (e) {
-            console.log('🔄 Navigation fallback: URL navigation interrupted (this is normal):', e.message);
+            domLogger.log('🔄 Navigation fallback: URL navigation interrupted (this is normal):', e.message);
         }
         return true;
     }
@@ -655,14 +656,14 @@ Object.assign(RedditDOMHelper, {
   },
 
   async navigateToPostsTab(username) {
-    console.log('Navigating to Posts tab...')
+    domLogger.log('Navigating to Posts tab...')
     
     // Removed early‑exit guard – always attempt to click the Posts tab, even if already on /submitted
     // This ensures a click event is fired for debugging / UI‑interaction purposes.
     // (If already on the page, the click will be a no‑op but still logged.)
     
     // Wait for profile page to be ready
-    console.log('Waiting for profile page to stabilize...');
+    domLogger.log('Waiting for profile page to stabilize...');
     await this.sleep(2000);
     
     // Try multiple methods to find and click the Posts tab
@@ -680,12 +681,12 @@ Object.assign(RedditDOMHelper, {
     for (const selector of postsTabSelectors) {
       const tab = this.deepQuery(selector);
       if (tab && this.isVisible(tab)) {
-        console.log(`Found Posts tab with selector: ${selector}, clicking...`);
+        domLogger.log(`Found Posts tab with selector: ${selector}, clicking...`);
         try {
           tab.click();
         } catch (e) {
           if (e.message && e.message.includes('AbortError')) {
-            console.warn('Ignoring AbortError during Posts tab click (navigation interrupted):', e.message);
+            domLogger.warn('Ignoring AbortError during Posts tab click (navigation interrupted):', e.message);
           } else {
             throw e;
           }
@@ -694,22 +695,22 @@ Object.assign(RedditDOMHelper, {
         
         // Verify we navigated
         if (window.location.pathname.includes('/submitted')) {
-          console.log('Successfully navigated to Posts tab via click!');
+          domLogger.log('Successfully navigated to Posts tab via click!');
           return true;
         }
       }
     }
     
     // Method 2: Find by text content "Posts"
-    console.log('Trying to find Posts tab by text content...');
+    domLogger.log('Trying to find Posts tab by text content...');
     const postsTabByText = this.deepFindByText('Posts', 'a');
     if (postsTabByText && this.isVisible(postsTabByText)) {
-      console.log('Found "Posts" tab by text, clicking...');
+      domLogger.log('Found "Posts" tab by text, clicking...');
       try {
         postsTabByText.click();
       } catch (e) {
         if (e.message && e.message.includes('AbortError')) {
-          console.warn('Ignoring AbortError during Posts tab text click (navigation interrupted):', e.message);
+          domLogger.warn('Ignoring AbortError during Posts tab text click (navigation interrupted):', e.message);
         } else {
           throw e;
         }
@@ -717,23 +718,23 @@ Object.assign(RedditDOMHelper, {
       await this.sleep(3000);
       
       if (window.location.pathname.includes('/submitted')) {
-        console.log('Successfully navigated to Posts tab via text click!');
+        domLogger.log('Successfully navigated to Posts tab via text click!');
         return true;
       }
     }
     
     // Method 3: Look for tab buttons that might contain "Posts"
-    console.log('Trying to find Posts in tab buttons...');
+    domLogger.log('Trying to find Posts in tab buttons...');
     const allTabs = this.qsAll('a, button, [role="tab"]');
     for (const tab of allTabs) {
       const text = tab.textContent?.trim().toLowerCase() || '';
       if (text === 'posts' && this.isVisible(tab)) {
-        console.log('Found Posts tab button, clicking...', tab);
+        domLogger.log('Found Posts tab button, clicking...', tab);
         try {
           tab.click();
         } catch (e) {
           if (e.message && e.message.includes('AbortError')) {
-            console.warn('Ignoring AbortError during Posts tab button click (navigation interrupted):', e.message);
+            domLogger.warn('Ignoring AbortError during Posts tab button click (navigation interrupted):', e.message);
           } else {
             throw e;
           }
@@ -741,42 +742,42 @@ Object.assign(RedditDOMHelper, {
         await this.sleep(3000);
         
         if (window.location.pathname.includes('/submitted')) {
-          console.log('Successfully navigated to Posts tab!');
+          domLogger.log('Successfully navigated to Posts tab!');
           return true;
         }
       }
     }
     
     // Method 4: Fallback to direct URL navigation
-    console.log('Could not click Posts tab, falling back to URL navigation...');
+    domLogger.log('Could not click Posts tab, falling back to URL navigation...');
     const inferredUser = username || window.location.pathname.match(/\/user\/([^\/]+)/)?.[1];
     
     if (inferredUser) {
       const cleanUser = inferredUser.replace('u/', '');
-      console.log(`Navigating directly to /user/${cleanUser}/submitted/`);
+      domLogger.log(`Navigating directly to /user/${cleanUser}/submitted/`);
       window.location.href = `https://www.reddit.com/user/${cleanUser}/submitted/`;
       await this.sleep(4000);
       return true;
     }
 
-    console.log('Posts tab not found and no username for fallback');
+    domLogger.log('Posts tab not found and no username for fallback');
     return false;
   },
 
   async checkUserPosts() {
-    console.log('Checking user posts with enhanced metadata extraction...')
+    domLogger.log('Checking user posts with enhanced metadata extraction...')
     await this.sleep(3000)
 
     // Get all posts using comprehensive selectors
     const posts = this.qsAll('shreddit-post, [data-testid="post-container"], .Post')
-    console.log(`Found ${posts.length} posts`)
+    domLogger.log(`Found ${posts.length} posts`)
 
     if (posts.length > 0) {
-      console.log('Raw posts found:', posts.length)
+      domLogger.log('Raw posts found:', posts.length)
       
       // Debug: Log the first few post elements to understand structure
       posts.slice(0, 3).forEach((post, index) => {
-        console.log(`Post ${index} HTML structure:`, post.outerHTML.substring(0, 500))
+        domLogger.log(`Post ${index} HTML structure:`, post.outerHTML.substring(0, 500))
       })
       
       // Enhanced post data extraction with metadata
@@ -877,7 +878,7 @@ Object.assign(RedditDOMHelper, {
       }).filter(post => {
         if (!post) return false
         // Debug: Log what we're extracting for each post
-        console.log('Post extraction debug:', {
+        domLogger.log('Post extraction debug:', {
           timestamp: post.timestamp,
           postId: post.postId, 
           postUrl: post.postUrl,
@@ -894,17 +895,17 @@ Object.assign(RedditDOMHelper, {
       // Sort by timestamp (newest first)
       postsWithMetadata.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
 
-      console.log('=== ENHANCED POSTS SUMMARY ===')
-      console.log(`Total posts: ${posts.length}`)
-      console.log(`Posts with valid metadata: ${postsWithMetadata.length}`)
+      domLogger.log('=== ENHANCED POSTS SUMMARY ===')
+      domLogger.log(`Total posts: ${posts.length}`)
+      domLogger.log(`Posts with valid metadata: ${postsWithMetadata.length}`)
 
       postsWithMetadata.forEach((post, index) => {
-        console.log(`Post ${index + 1}: ${post.timestamp} | Status: ${post.isRemoved ? 'Removed' : post.isBlocked ? 'Blocked' : 'Active'} | URL: ${post.postUrl}`)
+        domLogger.log(`Post ${index + 1}: ${post.timestamp} | Status: ${post.isRemoved ? 'Removed' : post.isBlocked ? 'Blocked' : 'Active'} | URL: ${post.postUrl}`)
       })
 
       if (postsWithMetadata.length > 0) {
         const lastPost = postsWithMetadata[0]
-        console.log(`Last post details:`, lastPost)
+        domLogger.log(`Last post details:`, lastPost)
         
         // Return comprehensive data for background script analysis
         return {
@@ -915,7 +916,7 @@ Object.assign(RedditDOMHelper, {
         }
       }
     } else {
-      console.log('No posts found')
+      domLogger.log('No posts found')
     }
 
     return {
@@ -983,7 +984,7 @@ Object.assign(RedditDOMHelper, {
   },
 
   async deleteLastPost(postData) {
-    console.log('[DOM Script] Attempting to delete specific post:', postData);
+    domLogger.log('[DOM Script] Attempting to delete specific post:', postData);
     
     try {
       // Find the specific post to delete using the post data
@@ -993,7 +994,7 @@ Object.assign(RedditDOMHelper, {
         // Try to find post by ID first (most reliable)
         targetPost = document.querySelector(`shreddit-post[id="t3_${postData.postId}"]`) ||
                      document.querySelector(`[data-ks-id="t3_${postData.postId}"]`);
-        console.log('[DOM Script] Looking for post by ID t3_' + postData.postId + ':', targetPost);
+        domLogger.log('[DOM Script] Looking for post by ID t3_' + postData.postId + ':', targetPost);
       }
       
       if (!targetPost && postData && postData.postUrl) {
@@ -1002,7 +1003,7 @@ Object.assign(RedditDOMHelper, {
         if (postLinks.length > 0) {
           targetPost = postLinks[0].closest('shreddit-post') || 
                       postLinks[0].closest('[data-testid="post-container"]');
-          console.log('[DOM Script] Looking for post by URL ' + postData.postUrl + ':', targetPost);
+          domLogger.log('[DOM Script] Looking for post by URL ' + postData.postUrl + ':', targetPost);
         }
       }
       
@@ -1015,19 +1016,19 @@ Object.assign(RedditDOMHelper, {
                               post.querySelector('h3');
           if (titleElement && titleElement.textContent?.trim() === postData.title) {
             targetPost = post;
-            console.log('[DOM Script] Found post by title matching:', postData.title);
+            domLogger.log('[DOM Script] Found post by title matching:', postData.title);
             break;
           }
         }
       }
       
       if (!targetPost) {
-        console.log('[DOM Script] Target post not found, falling back to first post in DOM');
+        domLogger.log('[DOM Script] Target post not found, falling back to first post in DOM');
         targetPost = document.querySelector('[data-testid="post-container"]');
       }
       
       if (!targetPost) {
-        console.log('[DOM Script] No posts found on page');
+        domLogger.log('[DOM Script] No posts found on page');
         return false;
       }
       
@@ -1035,7 +1036,7 @@ Object.assign(RedditDOMHelper, {
       const optionsButton = targetPost.querySelector('button[aria-label*="Options"], button[aria-label*="More options"], [data-testid="post-dropdown"]');
       
       if (!optionsButton) {
-        console.log('[DOM Script] Options button not found for target post');
+        domLogger.log('[DOM Script] Options button not found for target post');
         return false;
       }
       
@@ -1047,7 +1048,7 @@ Object.assign(RedditDOMHelper, {
       const deleteButton = document.querySelector('button[aria-label*="Delete"], button:has-text("Delete"), [role="menuitem"]:has-text("Delete")');
       
       if (!deleteButton) {
-        console.log('[DOM Script] Delete option not found in dropdown');
+        domLogger.log('[DOM Script] Delete option not found in dropdown');
         // Close dropdown by clicking elsewhere
         document.body.click();
         return false;
@@ -1062,16 +1063,16 @@ Object.assign(RedditDOMHelper, {
       
       if (confirmButton) {
         confirmButton.click();
-        console.log('[DOM Script] Delete confirmation clicked');
+        domLogger.log('[DOM Script] Delete confirmation clicked');
         await new Promise(resolve => setTimeout(resolve, 1000));
         return true;
       } else {
-        console.log('[DOM Script] Delete confirmation button not found');
+        domLogger.log('[DOM Script] Delete confirmation button not found');
         return false;
       }
       
     } catch (error) {
-      console.error('[DOM Script] Error during post deletion:', error);
+      domLogger.error('[DOM Script] Error during post deletion:', error);
       return false;
     }
   }
@@ -1117,7 +1118,7 @@ window.addEventListener('message', async (event) => {
         success: success
     }, '*');
   } else if (type === 'REDDIT_POST_MACHINE_DELETE_POST') {
-    console.log('[DOM Script] Handling DELETE_POST request:', payload)
+    domLogger.log('[DOM Script] Handling DELETE_POST request:', payload)
     const success = await RedditDOMHelper.deleteLastPost(payload?.post);
     window.postMessage({ 
         type: 'REDDIT_POST_MACHINE_ACTION_RESULT', 
@@ -1126,7 +1127,7 @@ window.addEventListener('message', async (event) => {
         data: payload?.post
     }, '*');
   } else if (type === 'REDDIT_POST_MACHINE_GET_POSTS') {
-    console.log('[DOM Script] Handling GET_POSTS request:', payload)
+    domLogger.log('[DOM Script] Handling GET_POSTS request:', payload)
     const postsData = await RedditDOMHelper.checkUserPosts();
     window.postMessage({ 
         type: 'REDDIT_POST_MACHINE_ACTION_RESULT', 
