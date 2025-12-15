@@ -20,7 +20,7 @@
       <!-- Short status line showing last post info -->
       <div v-if="userStatus && storedUsername" class="text-caption text-grey-7 q-mt-xs" style="font-size: 11px;">
         <q-icon name="history" size="xs" class="q-mr-xs" />
-        {{ userStatus.postsCount }} posts · Last: {{ shortLastPostText }}
+        {{ postsCountText }} posts · Last: {{ shortLastPostText }}
       </div>
     </div>
 	  <q-btn
@@ -167,13 +167,31 @@ export default defineComponent({
     const decisionReport = ref(null)
     const executionResult = ref(null)
 
+    const getPostsArray = () => {
+      const data = postsData.value
+      const posts = data?.posts || data?.postsInfo?.posts
+      return Array.isArray(posts) ? posts : []
+    }
+
+    const postsCountText = computed(() => {
+      const fromStatus = userStatus.value?.postsCount
+      if (typeof fromStatus === 'number') return fromStatus
+      const data = postsData.value
+      const fromTotal = data?.total
+      if (typeof fromTotal === 'number') return fromTotal
+      const fromTotalPosts = data?.totalPosts
+      if (typeof fromTotalPosts === 'number') return fromTotalPosts
+      return getPostsArray().length
+    })
+
     // Computed property for short last post text display
     const shortLastPostText = computed(() => {
-      if (!postsData.value || !postsData.value.posts || postsData.value.posts.length === 0) {
+      const posts = getPostsArray()
+      if (posts.length === 0) {
         return 'never'
       }
       try {
-        const lastPost = postsData.value.posts[0]
+        const lastPost = posts[0]
         const lastDate = new Date(lastPost.timestamp)
         const now = new Date()
         const diffMs = now - lastDate
@@ -191,11 +209,12 @@ export default defineComponent({
 
     // Format last post text for detailed status
     const formatLastPostText = (userStatus) => {
-      if (!postsData.value || !postsData.value.posts || postsData.value.posts.length === 0) {
+      const posts = getPostsArray()
+      if (posts.length === 0) {
         return 'never'
       }
       try {
-        const lastPost = postsData.value.posts[0]
+        const lastPost = posts[0]
         const lastDate = new Date(lastPost.timestamp)
         const now = new Date()
         const diffMs = now - lastDate
@@ -596,12 +615,7 @@ export default defineComponent({
         // Use centralized tab reuse system instead of creating new tab
         chrome.runtime.sendMessage({
           type: 'CREATE_POST_TAB',
-          postData: {
-            title: 'Post from extension',
-            body: '#extension #reddit',
-            url: '',
-            subreddit: 'sphynx'
-          }
+          postData: null // Let background script generate via API
         }).then(response => {
           if (response.success) {
             console.log('Post tab created/reused successfully:', response.tabId)
@@ -784,6 +798,7 @@ export default defineComponent({
       postsData,
       decisionReport,
       executionResult,
+      postsCountText,
       shortLastPostText,
       formatLastPostText,
       formatTimestamp,

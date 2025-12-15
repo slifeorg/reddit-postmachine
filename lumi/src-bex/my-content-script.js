@@ -1527,13 +1527,9 @@ async function fetchPostDataForSubmission() {
     }
   }
   
-  // Generate dummy post data using existing service
-  return {
-    title: "Auto-generated post: " + Date.now(),
-    body: "#automated #reddit #post " + Date.now(),
-    url: "https://youtube.com/shorts/0xmhrS_VNNY?si=awYc8i5YljycesXq",
-    subreddit: "sphynx"
-  }
+  // If no stored data, this means the script is running without proper initialization
+  // This should not happen in normal flow since background script provides the data
+  throw new Error('No post data found - script may be running incorrectly')
 }
 
 async function fillPostFieldsSequentially(postData) {
@@ -1649,15 +1645,7 @@ async function continueProfileDataCollection() {
   }
 }
 
-// Generate default post data if none provided
-function generateDefaultPostData() {
-  return {
-    title: "Auto-generated post: " + Date.now(),
-    body: "#automated #reddit #post " + Date.now(),
-    url: "https://youtube.com/shorts/0xmhrS_VNNY?si=awYc8i5YljycesXq",
-    subreddit: "sphynx"
-  }
-}
+// Note: Post generation is now handled exclusively by background.js via API
 
 // Handle manual script trigger from background/popup
 async function handleManualScriptTrigger(scriptType, mode) {
@@ -1706,7 +1694,7 @@ function handleStartPostCreation(userName, postData) {
   console.log('Requesting background script to create new post tab')
   chrome.runtime.sendMessage({
     type: 'CREATE_POST_TAB',
-    postData: postData || generateDefaultPostData()
+    postData: postData // Only use data provided by background script
   }).then(response => {
     if (response.success) {
       console.log('Background script created post tab successfully:', response.tabId)
