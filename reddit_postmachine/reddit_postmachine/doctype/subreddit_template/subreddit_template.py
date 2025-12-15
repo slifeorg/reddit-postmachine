@@ -88,7 +88,7 @@ def safe_log_append(logs, message):
         pass  # Ignore any errors
 
 @frappe.whitelist()
-def generate_post_from_template(template_name, account_name=None, agent_name=None):
+def generate_post_from_template(template_name, account_name=None, agent_name=None, account_info=None):
     """
     Генерує та створює новий документ Reddit Post (викликається з кнопки на шаблоні або через API)
     """
@@ -139,6 +139,7 @@ def generate_post_from_template(template_name, account_name=None, agent_name=Non
             if not account_value:
                 frappe.throw("No Reddit Account found in system to assign to this post.")
             account_doc = frappe.get_doc("Reddit Account", account_value)
+            #frappe.throw(f"Account doc: {account_doc}")
         
         # ВАЖЛИВО: Встановлюємо дефолтні значення ОДРАЗУ після отримання account_doc
         # Це запобігає помилкам AttributeError при зверненні до неіснуючих полів
@@ -162,7 +163,7 @@ def generate_post_from_template(template_name, account_name=None, agent_name=Non
             frappe.throw(f"Account '{account_name_str}' is inactive or paused.")
         
         if account_name:
-            safe_log_append(logs, f"Account fixed by input: {account_doc.name}")
+            safe_log_append(logs, f"Account fixed by input: {account_doc.name} {account_info}")
         else:
             safe_log_append(logs, f"Account auto-selected: {account_doc.name}")
         
@@ -517,82 +518,142 @@ REMEMBER: If you use ANY square brackets [like this] in your response, it will b
         if not isinstance(content, str):
             content = str(content) if content else ""
         
-        # Словник замін плейсхолдерів на реальні значення
-        placeholder_replacements = {
-            r'\[Age\]': final_age,
-            r'\[age\]': final_age,
-            r'\[AGE\]': final_age,
-            r'\[Gender\]': 'M',  # За замовчуванням, можна змінити
-            r'\[gender\]': 'M',
-            r'\[GENDER\]': 'M',
-            r'\[City\]': final_location,
-            r'\[city\]': final_location,
-            r'\[CITY\]': final_location,
-            r'\[City name\]': final_location,
-            r'\[city name\]': final_location,
-            r'\[Location\]': final_location,
-            r'\[location\]': final_location,
-            r'\[LOCATION\]': final_location,
-            r'\[Connection Type\]': 'friendship',
-            r'\[connection type\]': 'friendship',
-            r'\[Kind of Connection\]': 'friendship',
-            r'\[kind of connection\]': 'friendship',
-            r'\[Type of Connection\]': 'friendship',
-            r'\[type of connection\]': 'friendship',
-            r'\[describe interests\]': final_profession,
-            r'\[specific interests\]': final_profession,
-            r'\[list limits\]': 'Respectful boundaries',
-            r'\[mention your availability\]': 'Available evenings and weekends',
-            r'\[mention availability\]': 'Available evenings and weekends',
-        }
-        
         # Автоматична заміна плейсхолдерів
         import re
-        original_title = title
-        original_content = content
         
         # Переконуємося, що final_age, final_location, final_profession є рядками
         safe_final_age = str(final_age) if final_age else "28"
         safe_final_location = str(final_location) if final_location else "New Haven"
         safe_final_profession = str(final_profession) if final_profession else "photographer"
+        safe_final_name = str(final_name) if final_name else account_username or "Unknown"
         
-        # Оновлюємо словник замін з безпечними значеннями
-        placeholder_replacements[r'\[Age\]'] = safe_final_age
-        placeholder_replacements[r'\[age\]'] = safe_final_age
-        placeholder_replacements[r'\[AGE\]'] = safe_final_age
-        placeholder_replacements[r'\[City\]'] = safe_final_location
-        placeholder_replacements[r'\[city\]'] = safe_final_location
-        placeholder_replacements[r'\[CITY\]'] = safe_final_location
-        placeholder_replacements[r'\[City name\]'] = safe_final_location
-        placeholder_replacements[r'\[city name\]'] = safe_final_location
-        placeholder_replacements[r'\[Location\]'] = safe_final_location
-        placeholder_replacements[r'\[location\]'] = safe_final_location
-        placeholder_replacements[r'\[LOCATION\]'] = safe_final_location
-        placeholder_replacements[r'\[describe interests\]'] = safe_final_profession
-        placeholder_replacements[r'\[specific interests\]'] = safe_final_profession
+        # Логуємо значення, які будуть використані для заміни
+        safe_log_append(logs, f"Placeholder replacement values - Age: '{safe_final_age}', Location: '{safe_final_location}', Profession: '{safe_final_profession}', Name: '{safe_final_name}'")
         
+        # Зберігаємо оригінальні значення для логування
+        original_title = title
+        original_content = content
+        
+        # Логуємо оригінальні значення перед заміною
+        safe_log_append(logs, f"Before replacement - Title: '{original_title[:100]}', Content preview: '{original_content[:200]}'")
+        
+        # Розширений словник замін плейсхолдерів на реальні значення
+        # Додаємо всі можливі варіанти плейсхолдерів
+        placeholder_replacements = [
+            # Age variations
+            (r'\[Age\]', safe_final_age),
+            (r'\[age\]', safe_final_age),
+            (r'\[AGE\]', safe_final_age),
+            # Gender variations
+            (r'\[Gender\]', 'M'),
+            (r'\[gender\]', 'M'),
+            (r'\[GENDER\]', 'M'),
+            # City/Location variations
+            (r'\[City\]', safe_final_location),
+            (r'\[city\]', safe_final_location),
+            (r'\[CITY\]', safe_final_location),
+            (r'\[City name\]', safe_final_location),
+            (r'\[city name\]', safe_final_location),
+            (r'\[CITY NAME\]', safe_final_location),
+            (r'\[Location\]', safe_final_location),
+            (r'\[location\]', safe_final_location),
+            (r'\[LOCATION\]', safe_final_location),
+            # Connection type variations
+            (r'\[Connection Type\]', 'friendship'),
+            (r'\[connection type\]', 'friendship'),
+            (r'\[CONNECTION TYPE\]', 'friendship'),
+            (r'\[Type of Connection\]', 'friendship'),
+            (r'\[type of connection\]', 'friendship'),
+            (r'\[TYPE OF CONNECTION\]', 'friendship'),
+            (r'\[Kind of Connection\]', 'friendship'),
+            (r'\[kind of connection\]', 'friendship'),
+            # Interests variations
+            (r'\[Interests\]', safe_final_profession),
+            (r'\[interests\]', safe_final_profession),
+            (r'\[INTERESTS\]', safe_final_profession),
+            (r'\[describe interests\]', safe_final_profession),
+            (r'\[specific interests\]', safe_final_profession),
+            (r'\[Specific Interests\]', safe_final_profession),
+            # Limits variations
+            (r'\[limits\]', 'Respectful boundaries'),
+            (r'\[Limits\]', 'Respectful boundaries'),
+            (r'\[LIMITS\]', 'Respectful boundaries'),
+            (r'\[list limits\]', 'Respectful boundaries'),
+            (r'\[List Limits\]', 'Respectful boundaries'),
+            # Availability variations
+            (r'\[local availability\]', 'Available evenings and weekends'),
+            (r'\[Local Availability\]', 'Available evenings and weekends'),
+            (r'\[LOCAL AVAILABILITY\]', 'Available evenings and weekends'),
+            (r'\[mention your availability\]', 'Available evenings and weekends'),
+            (r'\[mention availability\]', 'Available evenings and weekends'),
+            (r'\[Mention Availability\]', 'Available evenings and weekends'),
+            # Name variations
+            (r'\[name\]', safe_final_name),
+            (r'\[Name\]', safe_final_name),
+            (r'\[NAME\]', safe_final_name),
+        ]
+        
+        # Перевіряємо, чи є плейсхолдери перед заміною
+        has_placeholders_before = bool(re.search(r'\[.*?\]', title or '') or re.search(r'\[.*?\]', content or ''))
+        if has_placeholders_before:
+            safe_log_append(logs, f"Detected placeholders in AI response before replacement")
+        
+        # Виконуємо заміну плейсхолдерів
         try:
-            for pattern, replacement in placeholder_replacements.items():
+            # Спочатку замінюємо конкретні плейсхолдери
+            for pattern, replacement in placeholder_replacements:
                 if title:
-                    title = re.sub(pattern, str(replacement), title, flags=re.IGNORECASE)
+                    title = re.sub(pattern, replacement, title, flags=re.IGNORECASE)
                 if content:
-                    content = re.sub(pattern, str(replacement), content, flags=re.IGNORECASE)
+                    content = re.sub(pattern, replacement, content, flags=re.IGNORECASE)
             
             # Замінюємо будь-які інші квадратні дужки на порожній рядок (якщо не знайдено відповідності)
+            # Це має бути останнім кроком, щоб видалити всі інші плейсхолдери
+            # Використовуємо більш агресивний підхід - замінюємо всі квадратні дужки
             if title:
-                title = re.sub(r'\[.*?\]', '', title)
+                # Замінюємо всі квадратні дужки з будь-яким вмістом
+                title = re.sub(r'\[[^\]]*\]', '', title).strip()
+                # Видаляємо подвійні пробіли, які могли залишитися
+                title = re.sub(r'\s+', ' ', title).strip()
             if content:
-                content = re.sub(r'\[.*?\]', '', content)
-        except Exception as e:
-            safe_log_append(logs, f"Error during placeholder replacement: {str(e)}")
-            # Продовжуємо з оригінальними значеннями
-        
-        # Оновлюємо відповідь з виправленими значеннями
-        if ai_response and isinstance(ai_response, dict):
+                # Замінюємо всі квадратні дужки з будь-яким вмістом
+                content = re.sub(r'\[[^\]]*\]', '', content).strip()
+                # Видаляємо подвійні пробіли, які могли залишитися
+                content = re.sub(r'\s+', ' ', content).strip()
+            
+            # Перевіряємо, чи залишилися плейсхолдери після заміни
+            has_placeholders_after = bool(re.search(r'\[[^\]]*\]', title or '') or re.search(r'\[[^\]]*\]', content or ''))
+            
+            # Логуємо результат заміни
+            safe_log_append(logs, f"After replacement - Title: '{title[:100] if title else 'None'}', Content preview: '{content[:200] if content else 'None'}'")
+            
             if title != original_title or content != original_content:
-                safe_log_append(logs, f"WARNING: Placeholders found and replaced in AI response")
+                safe_log_append(logs, f"SUCCESS: Placeholders found and replaced in AI response")
                 safe_log_append(logs, f"Original title: {original_title[:100] if original_title else 'None'}")
                 safe_log_append(logs, f"Fixed title: {title[:100] if title else 'None'}")
+                safe_log_append(logs, f"Original content preview: {original_content[:200] if original_content else 'None'}")
+                safe_log_append(logs, f"Fixed content preview: {content[:200] if content else 'None'}")
+                if has_placeholders_after:
+                    safe_log_append(logs, f"ERROR: Some placeholders still remain after replacement!")
+            elif has_placeholders_before:
+                safe_log_append(logs, f"WARNING: Placeholders detected but replacement did not change values")
+                safe_log_append(logs, f"This might indicate a problem with the replacement logic")
+            else:
+                safe_log_append(logs, f"No placeholders detected in AI response")
+        except Exception as e:
+            safe_log_append(logs, f"Error during placeholder replacement: {str(e)}")
+            # Продовжуємо з оригінальними значеннями, але все одно намагаємося видалити квадратні дужки
+            try:
+                if title:
+                    title = re.sub(r'\[.*?\]', '', title).strip()
+                if content:
+                    content = re.sub(r'\[.*?\]', '', content).strip()
+            except Exception:
+                pass
+        
+        # Оновлюємо відповідь з виправленими значеннями
+        # ВАЖЛИВО: Завжди оновлюємо ai_response з виправленими значеннями
+        if ai_response and isinstance(ai_response, dict):
             try:
                 ai_response["title"] = title
                 ai_response["content"] = content
@@ -606,6 +667,15 @@ REMEMBER: If you use ANY square brackets [like this] in your response, it will b
                     "url_to_share": ai_response.get("url_to_share", ""),
                     "hashtags": ai_response.get("hashtags", ""),
                 }
+        else:
+            # Якщо ai_response не є словником, створюємо новий
+            ai_response = {
+                "title": title,
+                "content": content,
+                "post_type": "Text",
+                "url_to_share": "",
+                "hashtags": "",
+            }
 
         # 7. Створення нового поста
         safe_log_append(logs, "Creating Reddit Post doc")
@@ -696,16 +766,13 @@ def generate_post_for_agent(agent_name):
         frappe.throw("Agent name is required.")
     
     # Безпечно додаємо до logs
-    safe_log_append(logs, f"Agent received: {agent_name}")
+    safe_log_append(logs, f"1Agent received: {agent_name}")
 
     # 1. Знаходимо акаунт агента
     account_name = frappe.db.get_value(
-        "Reddit Account", {"assistant_name": agent_name}, "name"
-    )
-    if not account_name:
-        account_name = frappe.db.get_value(
             "Reddit Account", {"username": agent_name}, "name"
         )
+    
     if not account_name:
         frappe.throw(f"No Reddit Account found for agent '{agent_name}'.")
     
@@ -719,16 +786,14 @@ def generate_post_for_agent(agent_name):
     # Включаємо posting_style, щоб уникнути помилок при серіалізації об'єкта Frappe
     for _field in ("account_description", "posting_style", "assistant_name", "assistant_age", 
                   "assistant_profession", "assistant_location", "custom_prompt_instructions", 
-                  "subreddit_group", "status", "is_posting_paused", "username"):
+                "username"):
         if not hasattr(account_doc, _field):
             if _field == "assistant_age":
                 setattr(account_doc, _field, None)
-            elif _field in ("is_posting_paused",):
-                setattr(account_doc, _field, False)
-            elif _field == "status":
-                setattr(account_doc, _field, "Inactive")
             else:
                 setattr(account_doc, _field, "")
+    safe_log_append(logs, f"Account doc: {account_doc}")
+    account_info = account_doc.as_dict().get("assistant_name", "") + " " + str(account_doc.as_dict().get("assistant_age", "")) + " " + account_doc.as_dict().get("assistant_profession", "")
     
     # Безпечно отримуємо subreddit_group
     subreddit_group = account_doc.subreddit_group
@@ -781,7 +846,7 @@ def generate_post_for_agent(agent_name):
 
     try:
         result = generate_post_from_template(
-            template_name, account_name=account_doc.name, agent_name=agent_name
+            template_name, account_name=account_doc.name, agent_name=agent_name, account_info=account_info
         )
     except Exception as e:
         log_error_safe("generate_post_for_agent", logs, e)
