@@ -1,5 +1,32 @@
 <template>
   <q-page class="q-pa-md" style="min-width: 350px; min-height: 400px;">
+    <!-- Top action buttons -->
+    <div class="row q-mb-md q-gutter-sm justify-center">
+      <q-btn
+        round
+        color="primary"
+        icon="add"
+        size="md"
+        @click="createPost"
+        :disable="!storedUsername"
+        class="shadow-2"
+      >
+        <q-tooltip>Create New Post</q-tooltip>
+      </q-btn>
+      
+      <q-btn
+        v-if="storedUsername"
+        round
+        color="info"
+        icon="info"
+        size="md"
+        @click="checkUserStatus"
+        class="shadow-2"
+      >
+        <q-tooltip>Check User Status</q-tooltip>
+      </q-btn>
+    </div>
+
     <div class="text-center q-mb-md">
       <q-avatar size="60px" class="q-mb-sm">
       </q-avatar>
@@ -23,14 +50,6 @@
         {{ postsCountText }} posts · Last: {{ shortLastPostText }}
       </div>
     </div>
-	  <q-btn
-		  class="full-width"
-		  color="primary"
-		  icon="add"
-		  label="Create New Post"
-		  @click="createPost"
-		  :disable="!storedUsername"
-	  />
     <q-separator class="q-mb-md" />
 
     <div class="q-gutter-y-sm">
@@ -46,14 +65,6 @@
 
 
 
-      <q-btn
-        v-if="storedUsername"
-        class="full-width"
-        color="info"
-        icon="info"
-        label="Check User Status"
-        @click="checkUserStatus"
-      />
 
       <q-btn
         v-if="storedUsername"

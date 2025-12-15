@@ -13,7 +13,7 @@ function injectDomScript() {
     console.log('DOM script already loaded')
     return
   }
-  
+
   const script = document.createElement('script')
   script.src = chrome.runtime.getURL('dom.js')
   script.onload = () => {
@@ -51,13 +51,13 @@ const isRedditPage = window.location.hostname.includes('reddit.com')
 async function routeAutoRunScript() {
   const url = window.location.href
   const hostname = window.location.hostname
-  
+
   // Exclude chat.reddit.com
   if (hostname === 'chat.reddit.com') {
     console.log('Skipping auto-run scripts on chat.reddit.com')
     return
   }
-  
+
   // Check auto-run settings
   let autoRunSettings
   try {
@@ -67,31 +67,31 @@ async function routeAutoRunScript() {
     console.warn('Failed to get auto-run settings, using defaults:', error)
     autoRunSettings = { profileDetection: true, postSubmission: true }
   }
-  
+
   // Check if we're already running a script to prevent duplicates
   const scriptStage = sessionStorage.getItem('reddit-post-machine-script-stage')
-  
+
   // Script 1: Profile detection and data collection (only on home page and specific pages)
   const pathname = window.location.pathname
-  if (autoRunSettings.profileDetection && 
+  if (autoRunSettings.profileDetection &&
       (url.includes('reddit.com') && (pathname === '/' || pathname === '/hot' || pathname === '/new' || pathname === '/popular') && !scriptStage)) {
     console.log('Auto-running profile detection script')
     sessionStorage.setItem('reddit-post-machine-script-stage', 'profile-started')
     setTimeout(() => runProfileDetectionScript(), 2000)
   }
-  
+
   // Continue profile script after navigation
   if (scriptStage === 'profile-navigating' && url.includes('/u/')) {
     console.log('Continuing profile detection script after navigation')
     setTimeout(() => continueProfileDetectionScript(), 2000)
   }
-  
+
   // Continue profile script after switching to posts
   if (scriptStage === 'profile-switching-to-posts' && url.includes('/submitted')) {
     console.log('Continuing profile detection script on posts page')
     setTimeout(() => continueProfileDataCollection(), 2000)
   }
-  
+
   // Script 2: Post submission script
   if (autoRunSettings.postSubmission && url.includes('reddit.com/submit')) {
     console.log('Auto-running post submission script')
@@ -103,17 +103,17 @@ if (isRedditPage) {
   initializeRedditIntegration()
   // Auto-run scripts disabled to prevent tab creation issues
   // routeAutoRunScript()
-  
+
   // Initialize username cache from storage
   initializeUsernameCache()
 }
 
 function removeBeforeUnloadListeners() {
   console.log('Removing Reddit\'s beforeunload event listeners to prevent "Leave site?" dialog')
-  
+
   // Remove window onbeforeunload handler
   window.onbeforeunload = null
-  
+
   // Add our own passive beforeunload listener that prevents the dialog
   window.addEventListener('beforeunload', (e) => {
     // Prevent the default behavior and don't show any dialog
@@ -121,16 +121,16 @@ function removeBeforeUnloadListeners() {
     e.returnValue = null
     return null
   }, true)
-  
+
   console.log('Beforeunload listeners disabled successfully')
 }
 
 function initializeRedditIntegration() {
   console.log('Initializing Reddit integration')
-  
+
   // Remove Reddit's beforeunload event listeners to prevent "Leave site?" dialog
   removeBeforeUnloadListeners()
-  
+
   // Notify background that we are ready immediately
   chrome.runtime.sendMessage({
       type: 'CONTENT_SCRIPT_READY',
@@ -155,13 +155,13 @@ function initializeRedditIntegration() {
           });
       }
   }, 1000);
-  
+
   // Add extension button to Reddit interface
   addExtensionButton()
-  
+
   // Track recently processed messages to prevent duplicates
   const recentMessages = new Set();
-  
+
   // Listen for messages from background script
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log('Content script received message:', message)
@@ -170,7 +170,7 @@ function initializeRedditIntegration() {
       sendResponse({ pong: true, url: window.location.href })
       return true
     }
-    
+
     // For START_POST_CREATION, use more specific deduplication to avoid blocking valid retries
     if (message.type === 'START_POST_CREATION') {
       const msgKey = `${message.type}-${message.userName}-${JSON.stringify(message.postData)}`;
@@ -191,84 +191,90 @@ function initializeRedditIntegration() {
       recentMessages.add(msgKey);
       setTimeout(() => recentMessages.delete(msgKey), 500);
     }
-    
+
     switch (message.type) {
       case 'REDDIT_PAGE_LOADED':
         handlePageLoaded(message.url)
         break
-        
+
       case 'FILL_POST_FORM':
         fillPostForm(message.data)
         break
-        
+
       case 'GET_PAGE_INFO':
         sendResponse(getPageInfo())
         break
-        
+
       case 'START_POST_CREATION':
         handleStartPostCreation(message.userName, message.postData)
         break
-        
+
       case 'EXTRACT_USERNAME_AND_CREATE_POST':
         handleExtractUsernameAndCreatePost()
         break
-        
+
       case 'CHECK_USER_STATUS':
         handleCheckUserStatus(message.userName)
         break
-        
+
       case 'DELETE_LAST_POST':
         handleDeleteLastPost(message.userName)
         break
-        
+
       case 'BG_LOG':
         // Visual logging for debugging from background script
         console.log(`%c[BACKGROUND] ${message.message}`, 'color: #ff00ff; font-weight: bold;')
         break
-        
+
       case 'REDDIT_POST_MACHINE_NAVIGATE_POSTS':
         console.log('[Content Script] Received command: NAVIGATE_POSTS', message)
         sendResponse({ started: true })
-        window.postMessage({ 
+        window.postMessage({
           type: 'REDDIT_POST_MACHINE_NAVIGATE_POSTS',
-          payload: message.payload 
+          payload: message.payload
         }, '*')
         break
-        
+
       case 'REDDIT_POST_MACHINE_GET_POSTS':
         console.log('[Content Script] Received command: GET_POSTS', message)
         sendResponse({ started: true })
-        window.postMessage({ 
+        window.postMessage({
           type: 'REDDIT_POST_MACHINE_GET_POSTS',
-          payload: message.payload 
+          payload: message.payload
         }, '*')
         break
-        
+
       case 'REDDIT_POST_MACHINE_NAVIGATE_PROFILE':
         console.log('[Content Script] Received command: NAVIGATE_PROFILE', message)
         sendResponse({ started: true })
         handleCheckUserStatus(message.payload.userName)
         break
-        
+
       case 'REDDIT_POST_MACHINE_DELETE_POST':
         console.log('[Content Script] Received command: DELETE_POST', message)
         sendResponse({ started: true })
-        window.postMessage({ 
+        window.postMessage({
           type: 'REDDIT_POST_MACHINE_DELETE_POST',
-          payload: message.payload 
+          payload: message.payload
         }, '*')
         break
-        
+
       case 'MANUAL_TRIGGER_SCRIPT':
         console.log('[Content Script] Received manual trigger:', message)
         handleManualScriptTrigger(message.scriptType, message.mode)
         sendResponse({ started: true })
         break
-        
+
+      case 'GET_FRESH_POSTS_FOR_DECISION':
+        console.log('[Content Script] Received GET_FRESH_POSTS_FOR_DECISION:', message)
+        handleGetFreshPostsForDecision(message.userName)
+        sendResponse({ started: true })
+        break
+
       default:
         console.warn('Unknown message type:', message.type)
     }
-    
+
     return true
   })
 }
@@ -278,7 +284,7 @@ function addExtensionButton() {
   const submitArea = document.querySelector('[data-testid="submit-page"]') ||
                     document.querySelector('.submit-page') ||
                     document.querySelector('#newlink')
-  
+
   if (submitArea && !document.querySelector('.reddit-post-machine-btn')) {
     const button = document.createElement('button')
     button.className = 'reddit-post-machine-btn'
@@ -293,12 +299,12 @@ function addExtensionButton() {
       cursor: pointer;
       font-weight: bold;
     `
-    
+
     button.addEventListener('click', (e) => {
       e.preventDefault()
       openExtensionPopup()
     })
-    
+
     // Insert the button
     submitArea.insertBefore(button, submitArea.firstChild)
     console.log('Reddit Post Machine button added')
@@ -315,24 +321,24 @@ function openExtensionPopup() {
 
 function handlePageLoaded(url) {
   console.log('Reddit page loaded:', url)
-  
+
   // Re-add button if needed (in case page was dynamically loaded)
   setTimeout(() => {
     addExtensionButton()
   }, 1000)
-  
+
   // Check if we're on the submit page and have post data to continue
   if (url.includes('reddit.com/submit')) {
     console.log('On submit page, checking for post data')
-    
+
     const storedPostData = sessionStorage.getItem('reddit-post-machine-postdata')
     if (storedPostData) {
       const postData = JSON.parse(storedPostData)
       console.log('Found stored post data, continuing post creation:', postData)
-      
+
       // Extract username from post data or use a default
       const userName = postData.userName || 'User'
-      
+
       // Show welcome message and fill form
       showWelcomeMessage(userName)
       setTimeout(() => fillPostForm(postData), 1000)
@@ -344,7 +350,7 @@ function handlePageLoaded(url) {
 
 function fillPostForm(data) {
   console.log('Starting post creation with working logic:', data)
-  
+
   // Use the working post creation logic
   createPostWithWorkingCode(data)
 }
@@ -364,7 +370,7 @@ async function createPostWithWorkingCode(postData) {
 
   console.log('Waiting for post creation page to load...')
   await sleep(2000)
-  
+
   // Remove beforeunload listeners again after page load
   removeBeforeUnloadListeners()
 
@@ -400,37 +406,37 @@ async function createPostWithWorkingCode(postData) {
 
   if (postClicked) {
     console.log('Post button clicked, waiting for response...')
-    
+
     // Monitor for submission completion for up to 30 seconds
     const startTime = Date.now()
     const timeout = 30000 // 30 seconds
-    
+
     while (Date.now() - startTime < timeout) {
       await sleep(1000)
-      
+
       // Check if we've been redirected away from submit page (success)
       if (!window.location.href.includes('/submit')) {
         console.log('SUCCESS: Redirected from submission page - post submitted!')
-        
+
         // Notify background that post creation is complete
         chrome.runtime.sendMessage({
           type: 'ACTION_COMPLETED',
-          action: 'POST_CREATION_COMPLETED', 
+          action: 'POST_CREATION_COMPLETED',
           success: true
         }).catch(err => {
           console.warn('Failed to notify background of completion:', err)
         })
-        
+
         return true
       }
-      
+
       // Check for error messages (post rejected)
       const errorMessages = qsAll('[role="alert"], .error-message, [class*="error"], [class*="moderator"]')
       for (const error of errorMessages) {
         const text = error.textContent?.toLowerCase() || ''
         if (text.includes('rule') || text.includes('violation') || text.includes('remove')) {
           console.log('Post rejected due to rule violations:', text.substring(0, 100))
-          
+
           // Notify background that post creation failed
           chrome.runtime.sendMessage({
             type: 'ACTION_COMPLETED',
@@ -440,11 +446,11 @@ async function createPostWithWorkingCode(postData) {
           }).catch(err => {
             console.warn('Failed to notify background of failure:', err)
           })
-          
+
           return false
         }
       }
-      
+
       // Check if post is still being processed (loading states)
       const loadingElements = qsAll('[data-testid*="loading"], .loading, [class*="loading"], [aria-busy="true"]')
       if (loadingElements.length > 0) {
@@ -452,35 +458,35 @@ async function createPostWithWorkingCode(postData) {
         continue
       }
     }
-    
+
     // Timeout reached - unclear what happened
     console.log('Post submission timeout - status unclear')
-    
+
     // Notify background of timeout
     chrome.runtime.sendMessage({
-      type: 'ACTION_COMPLETED', 
+      type: 'ACTION_COMPLETED',
       action: 'POST_CREATION_COMPLETED',
       success: false,
       error: 'Post submission timeout'
     }).catch(err => {
       console.warn('Failed to notify background of timeout:', err)
     })
-    
+
     return false
-    
+
   } else {
     console.log('FAILED: Could not click Post button')
-    
+
     // Notify background that post creation failed
     chrome.runtime.sendMessage({
       type: 'ACTION_COMPLETED',
       action: 'POST_CREATION_COMPLETED',
-      success: false, 
+      success: false,
       error: 'Could not click Post button'
     }).catch(err => {
       console.warn('Failed to notify background of button failure:', err)
     })
-    
+
     return false
   }
 }
@@ -735,12 +741,12 @@ function selectSubreddit(subreddit) {
   // Try to find and select the subreddit
   const subredditSelect = document.querySelector('[data-testid="subreddit-selector"]') ||
                          document.querySelector('.subreddit-input')
-  
+
   if (subredditSelect) {
     // Handle different types of subreddit selectors
     if (subredditSelect.tagName === 'SELECT') {
       // Dropdown select
-      const option = Array.from(subredditSelect.options).find(opt => 
+      const option = Array.from(subredditSelect.options).find(opt =>
         opt.text.toLowerCase().includes(subreddit.toLowerCase())
       )
       if (option) {
@@ -759,7 +765,7 @@ function getPageInfo() {
   const url = window.location.href
   const hostname = window.location.hostname
   const pathname = window.location.pathname
-  
+
   // Detect page type
   let pageType = 'unknown'
   if (pathname.includes('/submit')) {
@@ -769,14 +775,14 @@ function getPageInfo() {
   } else if (pathname === '/' || pathname === '/hot' || pathname === '/new') {
     pageType = 'home'
   }
-  
+
   // Get current subreddit if on subreddit page
   let currentSubreddit = null
   const subredditMatch = pathname.match(/\/r\/([^\/]+)/)
   if (subredditMatch) {
     currentSubreddit = subredditMatch[1]
   }
-  
+
   return {
     url,
     hostname,
@@ -788,24 +794,24 @@ function getPageInfo() {
 }
 
 // Helper functions from working code
-function qs(s, r = document) { 
-  try { 
-    return (r || document).querySelector(s) 
-  } catch { 
-    return null 
-  } 
+function qs(s, r = document) {
+  try {
+    return (r || document).querySelector(s)
+  } catch {
+    return null
+  }
 }
 
-function qsAll(s, r = document) { 
-  try { 
-    return Array.from((r || document).querySelectorAll(s)) 
-  } catch { 
-    return [] 
-  } 
+function qsAll(s, r = document) {
+  try {
+    return Array.from((r || document).querySelectorAll(s))
+  } catch {
+    return []
+  }
 }
 
-async function sleep(ms) { 
-  return new Promise(r => setTimeout(r, ms)) 
+async function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms))
 }
 
 // Deep query function for shadow DOM support (from working code)
@@ -844,12 +850,12 @@ async function waitForElements(selector, timeout = 5000) {
 
 async function openUserDropdown() {
   console.log('Opening user dropdown...')
-  
+
   // Try multiple selectors for the user avatar/dropdown button
   const selectors = [
     'rpl-dropdown div',
     '[data-testid="user-avatar"]',
-    'button[aria-label*="user"]', 
+    'button[aria-label*="user"]',
     '#expand-user-drawer-button',
     'button[data-testid="user-menu-trigger"]',
     '[data-click-id="profile"]',
@@ -859,7 +865,7 @@ async function openUserDropdown() {
     'button[aria-label*="User"]',
     'button[title*="profile"]'
   ]
-  
+
   for (const selector of selectors) {
     const avatarButton = qs(selector)
     if (avatarButton) {
@@ -870,9 +876,9 @@ async function openUserDropdown() {
       return true
     }
   }
-  
+
   console.log('Avatar button not found with any selector')
-  
+
   // Log all buttons to help debug
   const allButtons = document.querySelectorAll('button')
   console.log('All buttons on page:', allButtons.length)
@@ -881,7 +887,7 @@ async function openUserDropdown() {
       console.log(`Button ${i}:`, btn.outerHTML.substring(0, 200))
     }
   })
-  
+
   return false
 }
 
@@ -911,7 +917,7 @@ async function getAuthenticatedUsername() {
     console.log(`Using cached authenticated username: ${cachedUsername}`)
     return cachedUsername
   }
-  
+
   // Try to get username from user dropdown without opening it
   const authSelectors = [
     'button[id*="user-dropdown"] [class*="text-12"]',
@@ -919,7 +925,7 @@ async function getAuthenticatedUsername() {
     '.header-user-dropdown [class*="text-12"]',
     'button[aria-label*="User"] span[class*="text-12"]'
   ]
-  
+
   for (const selector of authSelectors) {
     const element = qs(selector)
     if (element) {
@@ -932,18 +938,18 @@ async function getAuthenticatedUsername() {
       }
     }
   }
-  
+
   // If not found, try opening dropdown and getting username
   if (await openUserDropdown()) {
     // Wait longer for dropdown to fully load and use waitForElement
     await sleep(2000)
-    
+
     const dropdownSelectors = [
       'span.text-12.text-secondary-weak',
       '[id*="user-drawer"] span[class*="text-12"]',
       '.text-12'
     ]
-    
+
     for (const selector of dropdownSelectors) {
       // Wait for elements to appear
       const elements = await waitForElements(selector, 3000)
@@ -953,7 +959,7 @@ async function getAuthenticatedUsername() {
           // Close dropdown by clicking outside
           document.body.click()
           await sleep(500)
-          
+
           // Update cache
           cachedUsername = text
           cacheTimestamp = Date.now()
@@ -962,7 +968,7 @@ async function getAuthenticatedUsername() {
       }
     }
   }
-  
+
   return null
 }
 
@@ -975,7 +981,7 @@ async function isOwnProfilePage(username) {
     'a[href*="/r/ModTool"]',
     '[data-click-id="user_profile"]'
   ]
-  
+
   for (const selector of ownProfileIndicators) {
     const element = qs(selector)
     if (element) {
@@ -983,7 +989,7 @@ async function isOwnProfilePage(username) {
       return true
     }
   }
-  
+
   // Check button text content for "Edit" indicators
   const buttons = document.querySelectorAll('button')
   for (const button of buttons) {
@@ -993,13 +999,13 @@ async function isOwnProfilePage(username) {
       return true
     }
   }
-  
+
   // Check if cached authenticated username matches URL username (avoid recursive call)
   if (cachedUsername && Date.now() - cacheTimestamp < CACHE_DURATION) {
     const cleanAuthUsername = cachedUsername.replace('u/', '')
     return cleanAuthUsername === username
   }
-  
+
   return false
 }
 
@@ -1008,15 +1014,15 @@ let isExtractingUsername = false
 
 async function extractUsernameFromPage() {
   console.log('Extracting username from Reddit page using multiple methods...')
-  
+
   // Prevent concurrent extractions
   if (isExtractingUsername) {
     console.log('Username extraction already in progress, skipping...')
     return null
   }
-  
+
   isExtractingUsername = true
-  
+
   try {
   // Method 1: Prioritize authenticated user indicators (dropdown/avatar)
   // These show YOUR username, not just any username on the page
@@ -1026,7 +1032,7 @@ async function extractUsernameFromPage() {
     await storeUsernameInStorage(authUsername)
     return authUsername
   }
-  
+
   // Method 2: Only check URL if we're on our own profile page
   // (This requires additional validation to ensure it's our profile)
   const urlMatch = window.location.pathname.match(/\/u\/([^\/]+)/)
@@ -1036,7 +1042,7 @@ async function extractUsernameFromPage() {
     await storeUsernameInStorage(username)
     return username
   }
-  
+
   // Method 3: Generic page element scanning as final fallback
   // (Only used if authenticated detection fails)
   const usernameSelectors = [
@@ -1046,7 +1052,7 @@ async function extractUsernameFromPage() {
     '.header-user-dropdown .text-12',
     '[aria-label*="u/"]'
   ]
-  
+
   for (const selector of usernameSelectors) {
     const elements = qsAll(selector)
     for (const element of elements) {
@@ -1065,11 +1071,11 @@ async function extractUsernameFromPage() {
       }
     }
   }
-  
+
   // Method 3: Fallback - navigate to profile page to extract username
   console.log('All methods failed, trying profile page navigation fallback...')
   return await tryProfilePageFallback()
-  
+
   } finally {
     isExtractingUsername = false
   }
@@ -1078,14 +1084,14 @@ async function extractUsernameFromPage() {
 // Fallback method - navigate to profile page to extract username
 async function tryProfilePageFallback() {
   console.log('Attempting profile page navigation fallback...')
-  
+
   // First, try to find any link to user profile in the current page
   const profileLinks = document.querySelectorAll('a[href*="/user/"], a[href*="/u/"]')
   if (profileLinks.length > 0) {
     // Get the first profile link (likely our own)
     const profileUrl = profileLinks[0].href
     console.log(`Found profile link: ${profileUrl}`)
-    
+
     // Extract username from URL
     const urlMatch = profileUrl.match(/\/(user|u)\/([^\/]+)/)
     if (urlMatch) {
@@ -1095,18 +1101,18 @@ async function tryProfilePageFallback() {
       return username
     }
   }
-  
+
   // If no profile link found, try opening dropdown again with longer wait
   console.log('No profile link found, trying dropdown with extended wait...')
   if (await openUserDropdown()) {
     await sleep(3000) // Wait 3 seconds for dropdown to fully load
-    
+
     const dropdownSelectors = [
       'span.text-12.text-secondary-weak',
       '[id*="user-drawer"] span[class*="text-12"]',
       '.text-12'
     ]
-    
+
     for (const selector of dropdownSelectors) {
       const elements = await waitForElements(selector, 5000)
       for (const element of elements) {
@@ -1114,7 +1120,7 @@ async function tryProfilePageFallback() {
         if (text && text.startsWith('u/')) {
           document.body.click() // Close dropdown
           await sleep(500)
-          
+
           cachedUsername = text
           cacheTimestamp = Date.now()
           await storeUsernameInStorage(text)
@@ -1124,7 +1130,7 @@ async function tryProfilePageFallback() {
       }
     }
   }
-  
+
   console.log('Could not extract username using any method')
   return null
 }
@@ -1137,14 +1143,14 @@ async function storeUsernameInStorage(username) {
       timestamp: Date.now(),
       pageUrl: window.location.href
     }
-    
+
     // Store in chrome.storage.sync for cross-device sync
     await chrome.storage.sync.set({ redditUser: data })
     console.log(`Stored seren_name in Chrome storage: ${username}`)
-    
+
     // Also store in local storage as backup
     await chrome.storage.local.set({ redditUser: data })
-    
+
     // Notify background script about the username update
     await chrome.runtime.sendMessage({
       type: 'USERNAME_STORED',
@@ -1165,13 +1171,13 @@ async function getStoredUsername() {
       console.log(`Retrieved seren_name from sync storage: ${syncResult.redditUser.seren_name}`)
       return syncResult.redditUser
     }
-    
+
     const localResult = await chrome.storage.local.get(['redditUser'])
     if (localResult.redditUser && localResult.redditUser.seren_name) {
       console.log(`Retrieved seren_name from local storage: ${localResult.redditUser.seren_name}`)
       return localResult.redditUser
     }
-    
+
     console.log('No stored username found')
     return null
   } catch (error) {
@@ -1182,39 +1188,39 @@ async function getStoredUsername() {
 
 function checkIfLoggedIn() {
   console.log('Checking if user is logged in using proven method...')
-  
+
   // Look for the avatar button that would indicate logged in state
   const avatarButton = qs('rpl-dropdown div, [data-testid="user-avatar"], button[aria-label*="user"], #expand-user-drawer-button')
-  
+
   if (avatarButton) {
     console.log('Found user avatar button - user is logged in')
     return true
   }
-  
+
   // Also check for login/signup buttons which would indicate NOT logged in
   const loginButtons = qsAll('a[href*="login"], button[title*="Log In"], a[href*="register"]')
   if (loginButtons.length > 0) {
     console.log('Found login buttons - user is not logged in')
     return false
   }
-  
+
   console.log('Could not determine login status')
   return false
 }
 
 async function handleExtractUsernameAndCreatePost() {
   console.log('Extracting username and creating post...')
-  
+
   // Check if user is logged in
   if (!checkIfLoggedIn()) {
     console.log('User is not logged in to Reddit')
     showLoginMessage()
     return
   }
-  
+
   // Extract username (this is now async)
   const username = await extractUsernameFromPage()
-  
+
   if (username) {
     console.log(`Extracted username: ${username}`)
     // Store the username for later use
@@ -1268,7 +1274,7 @@ function createMessageDiv(icon, title, message, color) {
 
 function showTemporaryMessage(messageDiv) {
   document.body.appendChild(messageDiv)
-  
+
   // Auto-remove after 4 seconds
   setTimeout(() => {
     if (messageDiv.parentNode) {
@@ -1283,7 +1289,7 @@ function showTemporaryMessage(messageDiv) {
 // Auto-run Script 1: Profile Detection and Data Collection
 async function runProfileDetectionScript() {
   console.log('=== PROFILE DETECTION SCRIPT STARTED ===')
-  
+
   try {
     // Detect username
     const username = await extractUsernameFromPage()
@@ -1292,9 +1298,9 @@ async function runProfileDetectionScript() {
       sessionStorage.removeItem('reddit-post-machine-script-stage')
       return
     }
-    
+
     console.log(`Profile script: Detected username ${username}`)
-    
+
     // Navigate to profile page if not already there
     if (!window.location.href.includes(username.replace('u/', ''))) {
       console.log(`Profile script: Navigating to ${username} profile`)
@@ -1302,21 +1308,21 @@ async function runProfileDetectionScript() {
       window.location.href = `https://www.reddit.com/${username}`
       return
     }
-    
+
     // Switch to posts tab
     await switchToPostsTab()
-    
+
     // Capture data from posts page
     const postsData = await capturePostsData(username)
-    
+
     // Store in Chrome storage
     await storeProfileData(username, postsData)
-    
+
     // Clear script stage
     sessionStorage.removeItem('reddit-post-machine-script-stage')
-    
+
     console.log('=== PROFILE DETECTION SCRIPT COMPLETED ===')
-    
+
   } catch (error) {
     console.error('Profile detection script error:', error)
     sessionStorage.removeItem('reddit-post-machine-script-stage')
@@ -1325,7 +1331,7 @@ async function runProfileDetectionScript() {
 
 async function switchToPostsTab() {
   console.log('Switching to posts tab...')
-  
+
   const postsTabSelectors = [
     'a[href*="/submitted"]',
     'button[data-tab="posts"]',
@@ -1333,7 +1339,7 @@ async function switchToPostsTab() {
     'span:contains("Posts")',
     '[data-testid="posts-tab"]'
   ]
-  
+
   for (const selector of postsTabSelectors) {
     const element = qs(selector)
     if (element) {
@@ -1343,7 +1349,7 @@ async function switchToPostsTab() {
       return true
     }
   }
-  
+
   // Try to navigate directly to posts URL
   const currentUrl = window.location.href
   const usernameMatch = currentUrl.match(/\/u\/([^\/]+)/)
@@ -1354,29 +1360,29 @@ async function switchToPostsTab() {
     window.location.href = postsUrl
     return true
   }
-  
+
   console.log('Could not find posts tab')
   return false
 }
 
 async function capturePostsData(username) {
   console.log('Capturing posts data...')
-  
+
   const posts = []
   let attempts = 0
   const maxAttempts = 10
-  
+
   // Wait for posts to load with timeout mechanism
   while (attempts < maxAttempts && posts.length === 0) {
     const postElements = document.querySelectorAll('[data-testid="post-container"], article, div[data-click-id="text"]')
-    
+
     for (const element of postElements.slice(0, 10)) { // Limit to first 10 posts
       try {
         const titleElement = element.querySelector('h3, [data-testid="post-title"], a[href*="/comments/"]')
         const scoreElement = element.querySelector('[data-testid="post-vote-score"], div:contains("vote")')
         const commentsElement = element.querySelector('a[href*="/comments/"] span')
         const linkElement = element.querySelector('a[href*="/comments/"]')
-        
+
         if (titleElement) {
           const post = {
             title: titleElement.textContent?.trim() || '',
@@ -1392,14 +1398,14 @@ async function capturePostsData(username) {
         console.warn('Error parsing post element:', error)
       }
     }
-    
+
     if (posts.length === 0) {
       console.log(`No posts found, attempt ${attempts + 1}/${maxAttempts}`)
       await sleep(1000)
       attempts++
     }
   }
-  
+
   console.log(`Captured ${posts.length} posts`)
   return posts
 }
@@ -1412,20 +1418,20 @@ async function storeProfileData(username, postsData) {
       lastUpdated: Date.now(),
       pageUrl: window.location.href
     }
-    
+
     // Store in Chrome storage
     await chrome.storage.local.set({ redditProfileData: profileData })
     await chrome.storage.sync.set({ redditProfileData: profileData })
-    
+
     console.log(`Stored profile data for ${username} with ${postsData.length} posts`)
-    
+
     // Notify background script
     chrome.runtime.sendMessage({
       type: 'PROFILE_DATA_STORED',
       username: username,
       postsCount: postsData.length
     }).catch(() => {})
-    
+
   } catch (error) {
     console.error('Failed to store profile data:', error)
   }
@@ -1434,43 +1440,43 @@ async function storeProfileData(username, postsData) {
 // Auto-run Script 2: Post Submission Script
 async function runPostSubmissionScript() {
   console.log('=== POST SUBMISSION SCRIPT STARTED ===')
-  
+
   try {
     // Check if this tab was created by background script to prevent duplicate execution
     const tabStateResponse = await chrome.runtime.sendMessage({
       type: 'GET_TAB_STATE'
     })
-    
+
     if (tabStateResponse.success && tabStateResponse.isBackgroundPostTab) {
       console.log('Skipping auto-run post submission - this tab was created by background script')
       return
     }
-    
+
     // Ensure page is fully loaded and operable
     await ensureSubmitPageReady()
-    
+
     // Fetch post data (using existing stubs)
     const postData = await fetchPostDataForSubmission()
     if (!postData) {
       console.log('Post submission script: No post data available')
       return
     }
-    
+
     console.log('Post submission script: Got post data:', postData.title)
-    
+
     // Fill fields one by one
     await fillPostFieldsSequentially(postData)
-    
+
     // Press submit
     const submitSuccess = await submitPost()
-    
+
     if (submitSuccess) {
       console.log('Post submitted successfully, waiting 10 seconds...')
       await sleep(10000)
-      
+
       // Clear post data to prevent reuse
       sessionStorage.removeItem('reddit-post-machine-postdata')
-      
+
       // Close tab
       console.log('Closing tab after successful submission')
       chrome.runtime.sendMessage({
@@ -1484,9 +1490,9 @@ async function runPostSubmissionScript() {
       // Clear post data even on failure to prevent retry loops
       sessionStorage.removeItem('reddit-post-machine-postdata')
     }
-    
+
     console.log('=== POST SUBMISSION SCRIPT COMPLETED ===')
-    
+
   } catch (error) {
     console.error('Post submission script error:', error)
   }
@@ -1494,25 +1500,25 @@ async function runPostSubmissionScript() {
 
 async function ensureSubmitPageReady() {
   console.log('Ensuring submit page is ready...')
-  
+
   // Wait for key elements to be available
   const maxWaitTime = 10000
   const startTime = Date.now()
-  
+
   while (Date.now() - startTime < maxWaitTime) {
     const titleInput = deepQuery('faceplate-textarea-input[name="title"]')
     const postButton = deepQuery('#inner-post-submit-button, r-post-form-submit-button')
-    
+
     if (titleInput && postButton) {
       console.log('Submit page is ready')
       // Remove beforeunload listeners
       removeBeforeUnloadListeners()
       return true
     }
-    
+
     await sleep(500)
   }
-  
+
   throw new Error('Submit page did not become ready in time')
 }
 
@@ -1526,7 +1532,7 @@ async function fetchPostDataForSubmission() {
       console.warn('Failed to parse stored post data')
     }
   }
-  
+
   // If no stored data, this means the script is running without proper initialization
   // This should not happen in normal flow since background script provides the data
   throw new Error('No post data found - script may be running incorrectly')
@@ -1534,51 +1540,51 @@ async function fetchPostDataForSubmission() {
 
 async function fillPostFieldsSequentially(postData) {
   console.log('Filling post fields sequentially...')
-  
+
   // Step 1: Fill title
   console.log('Step 1: Filling title')
   await clickTab('TEXT')
   await fillTitle(postData.title)
-  
+
   // Step 2: Fill URL
   console.log('Step 2: Filling URL')
   await clickTab('LINK')
   await fillUrl(postData.url)
-  
+
   // Step 3: Activate post button
   console.log('Step 3: Activating post button')
   await clickBodyField()
-  
+
   // Step 4: Fill body text
   console.log('Step 4: Filling body text')
   await fillBodyText(postData.body)
-  
+
   // Step 5: Final activation
   console.log('Step 5: Final activation')
   await clickBodyField()
-  
+
   console.log('All fields filled sequentially')
 }
 
 async function submitPost() {
   console.log('Submitting post...')
-  
+
   const postClicked = await clickPostButton()
-  
+
   if (postClicked) {
     // Monitor for submission completion
     const startTime = Date.now()
     const timeout = 15000 // 15 seconds
-    
+
     while (Date.now() - startTime < timeout) {
       await sleep(1000)
-      
+
       // Check if redirected away from submit page
       if (!window.location.href.includes('/submit')) {
         console.log('Post submitted successfully')
         return true
       }
-      
+
       // Check for errors
       const errorElements = qsAll('[role="alert"], .error-message, [class*="error"]')
       for (const error of errorElements) {
@@ -1589,11 +1595,11 @@ async function submitPost() {
         }
       }
     }
-    
+
     console.log('Post submission timed out')
     return false
   }
-  
+
   console.log('Could not click post button')
   return false
 }
@@ -1601,11 +1607,11 @@ async function submitPost() {
 // Continue profile detection after navigation
 async function continueProfileDetectionScript() {
   console.log('=== CONTINUING PROFILE DETECTION AFTER NAVIGATION ===')
-  
+
   try {
     // Switch to posts tab
     await switchToPostsTab()
-    
+
   } catch (error) {
     console.error('Continue profile detection error:', error)
     sessionStorage.removeItem('reddit-post-machine-script-stage')
@@ -1615,7 +1621,7 @@ async function continueProfileDetectionScript() {
 // Continue profile data collection on posts page
 async function continueProfileDataCollection() {
   console.log('=== CONTINUING PROFILE DATA COLLECTION ===')
-  
+
   try {
     // Extract username from URL
     const usernameMatch = window.location.pathname.match(/\/u\/([^\/]+)/)
@@ -1624,21 +1630,21 @@ async function continueProfileDataCollection() {
       sessionStorage.removeItem('reddit-post-machine-script-stage')
       return
     }
-    
+
     const username = `u/${usernameMatch[1]}`
     console.log(`Extracted username from posts page: ${username}`)
-    
+
     // Capture data from posts page
     const postsData = await capturePostsData(username)
-    
+
     // Store in Chrome storage
     await storeProfileData(username, postsData)
-    
+
     // Clear script stage
     sessionStorage.removeItem('reddit-post-machine-script-stage')
-    
+
     console.log('=== PROFILE DETECTION SCRIPT COMPLETED ===')
-    
+
   } catch (error) {
     console.error('Continue profile data collection error:', error)
     sessionStorage.removeItem('reddit-post-machine-script-stage')
@@ -1650,7 +1656,7 @@ async function continueProfileDataCollection() {
 // Handle manual script trigger from background/popup
 async function handleManualScriptTrigger(scriptType, mode) {
   console.log(`=== MANUAL TRIGGER: ${scriptType} (mode: ${mode}) ===`)
-  
+
   try {
     if (scriptType === 'profile') {
       // Clear any existing script stage for manual execution
@@ -1663,7 +1669,7 @@ async function handleManualScriptTrigger(scriptType, mode) {
     } else {
       console.warn('Unknown script type for manual trigger:', scriptType)
     }
-    
+
     console.log(`=== MANUAL TRIGGER COMPLETED: ${scriptType} ===`)
   } catch (error) {
     console.error(`Manual trigger error for ${scriptType}:`, error)
@@ -1671,25 +1677,25 @@ async function handleManualScriptTrigger(scriptType, mode) {
 }
 
 function handleStartPostCreation(userName, postData) {
-  console.log(`Starting post creation for user: ${userName}`, postData)
-  
+  //console.log(`Starting post creation for user: ${userName}`, postData)
+
   if (postData) {
       sessionStorage.setItem('reddit-post-machine-postdata', JSON.stringify(postData));
   }
-  
+
   // Check if user is logged in first
-  console.log('Checking if user is logged in using proven method...')
-  
+  //console.log('Checking if user is logged in using proven method...')
+
   // Look for the avatar button that would indicate logged in state
   const avatarButton = qs('rpl-dropdown div, [data-testid="user-avatar"], button[aria-label*="user"], #expand-user-drawer-button')
-  
+
   if (avatarButton) {
-    console.log('Found user avatar button - user is logged in')
+    //console.log('Found user avatar button - user is logged in')
   } else {
-    console.log('User avatar button not found - user may not be logged in')
+    //console.log('User avatar button not found - user may not be logged in')
     return
   }
-  
+
   // Request background script to create new tab instead of navigating
   console.log('Requesting background script to create new post tab')
   chrome.runtime.sendMessage({
@@ -1712,7 +1718,7 @@ function findCreatePostElement() {
   if (element && element.textContent.includes('Create Post')) {
     return element
   }
-  
+
   // Search for spans containing "Create Post"
   const spans = document.querySelectorAll('span')
   for (let span of spans) {
@@ -1720,7 +1726,7 @@ function findCreatePostElement() {
       return span
     }
   }
-  
+
   // Check shadow roots (common in modern web apps)
   const allElements = document.querySelectorAll('*')
   for (let el of allElements) {
@@ -1733,198 +1739,8 @@ function findCreatePostElement() {
       }
     }
   }
-  
+
   return null
-}
-
-function clickCreatePostElement(element) {
-  console.log('Attempting to click Create Post element gracefully...')
-  
-  // Method 1: Direct click
-  try {
-    element.click()
-    console.log('Direct click attempted')
-    setTimeout(() => waitForSubmitPageContent(), 2000)
-    return true
-  } catch (e) {
-    console.log('Direct click failed:', e)
-  }
-  
-  // Method 2: Synthetic mouse events
-  try {
-    const mousedown = new MouseEvent('mousedown', { bubbles: true, cancelable: true })
-    const mouseup = new MouseEvent('mouseup', { bubbles: true, cancelable: true })
-    const click = new MouseEvent('click', { bubbles: true, cancelable: true })
-    
-    element.dispatchEvent(mousedown)
-    element.dispatchEvent(mouseup)
-    element.dispatchEvent(click)
-    console.log('Synthetic mouse events dispatched')
-    setTimeout(() => waitForSubmitPageContent(), 2000)
-    return true
-  } catch (e) {
-    console.log('Synthetic mouse events failed:', e)
-  }
-  
-  // Method 3: Check if parent is a link and navigate directly
-  const parentLink = element.closest('a[href]')
-  if (parentLink && parentLink.href) {
-    console.log('Found parent link, navigating directly:', parentLink.href)
-    // Check if it goes to the right submit page
-    if (parentLink.href.includes('/submit') && !parentLink.href.includes('/user/')) {
-      try {
-        window.location.href = parentLink.href
-        setTimeout(() => waitForSubmitPageContent(), 2000)
-        return true
-      } catch (error) {
-        console.warn('Parent link navigation failed:', error)
-      }
-    }
-  }
-  
-  // Method 4: Focus + Enter key
-  try {
-    element.focus()
-    const enterEvent = new KeyboardEvent('keydown', { 
-      key: 'Enter', 
-      code: 'Enter', 
-      bubbles: true, 
-      cancelable: true 
-    })
-    element.dispatchEvent(enterEvent)
-    console.log('Focus + Enter attempted')
-    setTimeout(() => waitForSubmitPageContent(), 2000)
-    return true
-  } catch (e) {
-    console.log('Focus + Enter failed:', e)
-  }
-  
-  return false
-}
-
-function clickElement(element) {
-  // Try multiple click methods
-  console.log('Attempting to click element with different methods...')
-  
-  // Method 1: Direct click
-  try {
-    element.click()
-    console.log('Direct click attempted')
-  } catch (e) {
-    console.log('Direct click failed:', e)
-  }
-  
-  // Method 2: Dispatch mouse events
-  try {
-    const mousedown = new MouseEvent('mousedown', { bubbles: true, cancelable: true })
-    const mouseup = new MouseEvent('mouseup', { bubbles: true, cancelable: true })
-    const click = new MouseEvent('click', { bubbles: true, cancelable: true })
-    
-    element.dispatchEvent(mousedown)
-    element.dispatchEvent(mouseup)
-    element.dispatchEvent(click)
-    console.log('Synthetic mouse events dispatched')
-  } catch (e) {
-    console.log('Synthetic mouse events failed:', e)
-  }
-  
-  // Method 3: Check if parent is a link and navigate directly
-  const parentLink = element.closest('a[href]')
-  if (parentLink && parentLink.href) {
-    console.log('Found parent link, navigating directly:', parentLink.href)
-    // Check if it goes to the right submit page
-    if (parentLink.href.includes('/submit') && !parentLink.href.includes('/user/')) {
-      window.location.href = parentLink.href
-      return true
-    }
-  }
-  
-  // Method 4: Focus + Enter key
-  try {
-    element.focus()
-    const enterEvent = new KeyboardEvent('keydown', { 
-      key: 'Enter', 
-      code: 'Enter', 
-      bubbles: true, 
-      cancelable: true 
-    })
-    element.dispatchEvent(enterEvent)
-    console.log('Focus + Enter attempted')
-  } catch (e) {
-    console.log('Focus + Enter failed:', e)
-  }
-  
-  return false
-}
-
-function waitForSubmitPageContent() {
-  console.log('Waiting for submit page content to load...')
-  
-  // Debug: Log current URL and available elements
-  console.log('Current URL:', window.location.href)
-  console.log('Available elements:', {
-    forms: document.querySelectorAll('form').length,
-    inputs: document.querySelectorAll('input, textarea').length,
-    buttons: document.querySelectorAll('button').length,
-    dataTestIds: document.querySelectorAll('[data-testid]').length
-  })
-  
-  // Add error handling for AbortError
-  window.addEventListener('error', (e) => {
-    if (e.message && e.message.includes('AbortError')) {
-      console.warn('Ignoring AbortError during page load:', e.message)
-      e.preventDefault()
-    }
-  }, { once: true })
-  
-  const observer = new MutationObserver((mutations, obs) => {
-    // Check if submit page elements are present with more comprehensive selectors
-    const submitContent = document.querySelector('form') || 
-                         document.querySelector('[data-testid*="post"]') ||
-                         document.querySelector('shreddit-post-composer') ||
-                         document.querySelector('.post-form') ||
-                         document.querySelector('textarea[placeholder*="title"]') ||
-                         document.querySelector('input[placeholder*="title"]') ||
-                         document.querySelector('[data-testid="post-form"]') ||
-                         document.querySelector('[data-testid="submit-page"]')
-    
-    if (submitContent) {
-      console.log('Submit page content detected:', submitContent.tagName, submitContent.className)
-      obs.disconnect()
-      
-      // Continue with post creation
-      const storedPostData = sessionStorage.getItem('reddit-post-machine-postdata')
-      if (storedPostData) {
-        const postData = JSON.parse(storedPostData)
-        console.log('Found stored post data, continuing post creation:', postData)
-        
-        const userName = postData.userName || 'User'
-        showWelcomeMessage(userName)
-        setTimeout(() => fillPostForm(postData), 1000)
-      } else {
-        console.log('No stored post data found')
-      }
-    }
-  })
-  
-  // Start observing the entire document for changes
-  observer.observe(document.body, {
-    childList: true,
-    subtree: true
-  })
-  
-  // Timeout after 10 seconds
-  setTimeout(() => {
-    observer.disconnect()
-    console.log('Timeout waiting for submit page content')
-    // Final debug: what elements are available now?
-    console.log('Final available elements:', {
-      forms: document.querySelectorAll('form').length,
-      textareas: document.querySelectorAll('textarea').length,
-      inputs: document.querySelectorAll('input').length,
-      allButtons: document.querySelectorAll('button').length
-    })
-  }, 10000)
 }
 
 function showWelcomeMessage(userName) {
@@ -1932,48 +1748,6 @@ function showWelcomeMessage(userName) {
   const existingMessage = document.querySelector('.reddit-post-machine-welcome')
   if (existingMessage) {
     existingMessage.remove()
-  }
-  
-  // Create welcome message element
-  const welcomeDiv = document.createElement('div')
-  welcomeDiv.className = 'reddit-post-machine-welcome'
-  welcomeDiv.innerHTML = `
-    <div style="
-      background: linear-gradient(135deg, #1976d2 0%, #42a5f5 100%);
-      color: white;
-      padding: 16px;
-      margin: 16px 0;
-      border-radius: 8px;
-      box-shadow: 0 4px 12px rgba(25, 118, 210, 0.3);
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    ">
-      <div style="display: flex; align-items: center; gap: 12px;">
-        <div style="font-size: 24px;">🚀</div>
-        <div>
-          <div style="font-weight: bold; font-size: 16px;">Welcome, ${userName}!</div>
-          <div style="font-size: 14px; opacity: 0.9;">Reddit Post Machine is ready to help you create your post.</div>
-        </div>
-      </div>
-    </div>
-  `
-  
-  // Find a good place to insert the message
-  const submitContainer = document.querySelector('[data-testid="submit-page"]') ||
-                         document.querySelector('.submit-page') ||
-                         document.querySelector('#newlink') ||
-                         document.body
-  
-  if (submitContainer) {
-    submitContainer.insertBefore(welcomeDiv, submitContainer.firstChild)
-    
-    // Auto-remove the message after 5 seconds
-    setTimeout(() => {
-      if (welcomeDiv.parentNode) {
-        welcomeDiv.style.transition = 'opacity 0.5s ease-out'
-        welcomeDiv.style.opacity = '0'
-        setTimeout(() => welcomeDiv.remove(), 500)
-      }
-    }, 5000)
   }
 }
 
@@ -1984,31 +1758,31 @@ if (document.readyState === 'loading') {
     checkForStoredUsername()
     checkForStoredPostData()
     // DISABLED: Auto-detect username on page load to prevent automatic tab creation
-    // setTimeout(() => {
-    //   tryAutoDetectUsername()
-    // }, 3000)
+    setTimeout(() => {
+      tryAutoDetectUsername()
+    }, 3000)
   })
 } else {
   initializeRedditIntegration()
   checkForStoredUsername()
   checkForStoredPostData()
   // DISABLED: Auto-detect username on page load to prevent automatic tab creation
-  // setTimeout(() => {
-  //   tryAutoDetectUsername()
-  // }, 3000)
+  setTimeout(() => {
+    tryAutoDetectUsername()
+  }, 3000)
 }
 
 // Function to auto-detect username on page load for testing
 async function tryAutoDetectUsername() {
   console.log('Auto-detecting username on page load...')
-  
+
   // Only try if we don't already have a stored username
   const storedUser = await getStoredUsername()
   if (storedUser && storedUser.seren_name) {
     console.log('Already have stored username:', storedUser.seren_name)
     return
   }
-  
+
   // Try to extract username from the page
   const username = await extractUsernameFromPage()
   if (username) {
@@ -2040,11 +1814,11 @@ function checkForStoredUsername() {
 window.addEventListener('message', async (event) => {
     // Check for both action result OR direct request from background (via window.postMessage from content script itself?? No.)
     // We only care about results from DOM script here
-    
+
     if (event.data.type === 'REDDIT_POST_MACHINE_ACTION_RESULT') {
         const { action, success, data } = event.data;
         console.log(`Action Result: ${action} Success: ${success}`, data);
-        
+
         // Forward result to background script
         try {
             chrome.runtime.sendMessage({
@@ -2061,7 +1835,7 @@ window.addEventListener('message', async (event) => {
         } catch (e) {
             console.warn('[Content Script] Error sending message:', e);
         }
-        
+
         // Show visual feedback to user
         if (!success) {
              const messageDiv = createMessageDiv('❌', 'Action Failed', `Step ${action} failed.`, '#d32f2f');
@@ -2069,16 +1843,16 @@ window.addEventListener('message', async (event) => {
         } else if (action === 'GET_POSTS') {
              // Save posts data to Chrome storage for popup consumption
              // 'data' here comes from dom.js checkUserPosts() and has { total, lastPostDate, posts }
-             
+
              // We want to store it so the Popup can read it immediately
              const storageData = {
                  postsInfo: data,
                  lastUpdated: Date.now()
              };
-             
+
              chrome.storage.local.set({ 'latestPostsData': storageData }, () => {
                  console.log('Posts data saved to local storage', storageData);
-                 
+
                  // Notify popup (if open) to refresh its view
                  chrome.runtime.sendMessage({
                      type: 'POSTS_UPDATED',
@@ -2102,13 +1876,13 @@ function checkForStoredPostData() {
             try {
                 const postData = JSON.parse(storedData);
                 fillPostForm(postData);
-                
+
                 // Clear after use
                 sessionStorage.removeItem('reddit-post-machine-postdata');
-                
+
                 // Don't notify completion yet - wait for actual post submission
                 // We'll monitor for successful submission separately
-                
+
             } catch (e) {
                 console.error('Error parsing stored post data', e);
             }
@@ -2122,9 +1896,9 @@ async function handleCheckUserStatus(userName) {
   console.log(`Checking user status for: ${userName}`)
   const statusDiv = createMessageDiv('🔍', 'Checking Status', `Checking status for ${userName}...`, '#2196f3')
   showTemporaryMessage(statusDiv)
-  
+
   // Trigger DOM action
-  window.postMessage({ 
+  window.postMessage({
     type: 'REDDIT_POST_MACHINE_NAVIGATE_PROFILE',
     payload: { userName }
   }, '*');
@@ -2134,13 +1908,13 @@ async function handleCheckUserStatus(userName) {
 function checkAccountLocked() {
   const phrases = ["we've locked your account", "locked your account", "account suspended"]
   const pageText = document.body.textContent.toLowerCase()
-  
+
   const hasLockedPhrase = phrases.some(phrase => pageText.includes(phrase))
-  
+
   const errorBanners = qsAll('faceplate-banner[appearance="error"]')
   const hasLockedBanner = errorBanners.some(el =>
     el.textContent?.toLowerCase().includes('locked') || el.textContent?.toLowerCase().includes('suspended'))
-  
+
   return hasLockedPhrase || hasLockedBanner
 }
 
@@ -2154,104 +1928,20 @@ async function waitForCondition(conditionFn, timeout = 10000, interval = 500) {
   return false
 }
 
-// Navigate to user profile (adapted from postm-page.js)
-async function navigateToUserProfile(userName) {
-  console.log('Navigating to user profile...')
-  
-  // Extract username without u/ prefix if present
-  const cleanUsername = userName.replace('u/', '')
-  const targetUrl = `https://www.reddit.com/user/${cleanUsername}`
-  
-  // Check if we are already on the correct page (ignoring query params/hash)
-  if (window.location.href.split('?')[0] === targetUrl || 
-      window.location.href.split('?')[0] === targetUrl + '/') {
-    console.log('Already on user profile page')
-    return true
-  }
-  
-  // Navigate directly to user profile URL
-  window.location.href = targetUrl
-  
-  // Wait for navigation to complete (detect change in URL or body content)
-  // Since a full page reload might happen, this script might restart.
-  // But if it's SPA navigation, we need to wait.
-  
-  await waitForCondition(() => {
-     return window.location.href.includes(cleanUsername) && document.readyState === 'complete'
-  }, 10000)
-  
-  await sleep(2000) // Small buffer for Reddit's hydration
-  return true
-}
-
-// Navigate to posts tab (from postm-page.js)
-async function navigateToPostsTab() {
-  console.log('Navigating to Posts tab...')
-  
-  // Check if we are already on the posts tab
-  if (window.location.pathname.endsWith('/submitted') || 
-      window.location.pathname.endsWith('/submitted/')) {
-      console.log('Already on submitted/posts page')
-      return true
-  }
-
-  const postsTabSelectors = [
-    'a[href*="/submitted/"]',
-    '#profile-tab-posts_tab',
-    'a:contains("Posts")',
-    'faceplate-tracker[noun="posts_tab"] a',
-    '[data-testid*="posts"]',
-    'button[aria-selected="false"][role="tab"]'
-  ]
-  
-  // Try to find and click the tab
-  let foundTab = false
-  for (const selector of postsTabSelectors) {
-    const postsTab = qs(selector)
-    if (postsTab && postsTab.textContent?.toLowerCase().includes('posts')) {
-      console.log('Found Posts tab, clicking...')
-      postsTab.click()
-      foundTab = true
-      break
-    }
-  }
-  
-  if (foundTab) {
-      // Wait for URL to update or posts to appear
-      await waitForCondition(() => window.location.href.includes('/submitted'), 5000)
-      return true
-  }
-  
-  console.log('Posts tab not found, trying alternative approach...')
-  
-  // Try to find posts by looking for submitted posts directly via URL navigation
-  const currentUrl = window.location.href
-  const username = currentUrl.match(/\/user\/([^\/]+)/)?.[1]
-  
-  if (username) {
-      const submittedUrl = `https://www.reddit.com/user/${username}/submitted/`
-      window.location.href = submittedUrl
-      await waitForCondition(() => window.location.href === submittedUrl, 5000)
-      await sleep(2000) 
-      return true
-  }
-  
-  return false
-}
 
 // Check user posts (from postm-page.js)
 async function checkUserPosts() {
   console.log('Checking user posts...')
-  
+
   // Wait for posts to appear
   let posts = []
   await waitForCondition(() => {
     posts = qsAll('shreddit-post, [data-testid="post-container"], .Post, [data-testid*="post"]')
     return posts.length > 0
   }, 5000, 500)
-  
+
   console.log(`Found ${posts.length} posts`)
-  
+
   if (posts.length > 0) {
     // Sort posts by date (newest first)
     const postsWithDates = posts.map(post => {
@@ -2259,20 +1949,27 @@ async function checkUserPosts() {
         post.querySelector('time, [data-testid="post_timestamp"]')?.getAttribute('datetime') ||
         post.querySelector('span[data-testid="post_timestamp"]')?.textContent ||
         post.querySelector('time')?.getAttribute('datetime')
-      
-      return { element: post, timestamp }
+
+      // Capture minimal moderation status for deletion decisions
+      const moderationStatus = {
+        isRemoved: post.textContent?.includes('removed by the moderators') || 
+                  post.querySelector('[icon-name="remove"]') !== null || false,
+        isLocked: post.querySelector('[icon-name="lock-fill"]') !== null
+      }
+
+      return { element: post, timestamp, moderationStatus }
     }).filter(post => post.timestamp)
-    
+
     // Sort by date (newest first)
     postsWithDates.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
-    
+
     console.log('=== POSTS SUMMARY ===')
     console.log(`Total posts: ${posts.length}`)
-    
+
     postsWithDates.forEach((post, index) => {
       console.log(`Post ${index + 1}: ${post.timestamp}`)
     })
-    
+
     if (postsWithDates.length > 0) {
       console.log(`Last post date: ${postsWithDates[0].timestamp}`)
       return {
@@ -2284,7 +1981,7 @@ async function checkUserPosts() {
   } else {
     console.log('No posts found')
   }
-  
+
   return {
     total: 0,
     lastPostDate: null,
@@ -2298,7 +1995,7 @@ async function saveUserStatusToStorage(userName, postsInfo) {
   console.log(`User: ${userName}`)
   console.log(`Total posts: ${postsInfo.total}`)
   console.log(`Last post date: ${postsInfo.lastPostDate || 'Not available'}`)
-  
+
   // Format the last post date
   let lastPostText = 'No posts found'
   if (postsInfo.lastPostDate) {
@@ -2307,7 +2004,7 @@ async function saveUserStatusToStorage(userName, postsInfo) {
       const now = new Date()
       const diffTime = Math.abs(now - lastPostDate)
       const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
-      
+
       if (diffDays === 1) {
         lastPostText = 'Yesterday'
       } else if (diffDays < 7) {
@@ -2322,7 +2019,7 @@ async function saveUserStatusToStorage(userName, postsInfo) {
       lastPostText = postsInfo.lastPostDate
     }
   }
-  
+
   // Create user status data object
   const userStatusData = {
     userName: userName,
@@ -2332,18 +2029,18 @@ async function saveUserStatusToStorage(userName, postsInfo) {
     timestamp: Date.now(),
     checkUrl: window.location.href
   }
-  
+
   try {
     // Save to both sync and local storage
     await chrome.storage.sync.set({ userStatus: userStatusData })
     await chrome.storage.local.set({ userStatus: userStatusData })
-    
+
     console.log('User status saved to Chrome storage:', userStatusData)
-    
+
     // Show brief success message
     const messageDiv = createMessageDiv('✅', 'Status Saved', 'User status data saved successfully', '#4caf50')
     showTemporaryMessage(messageDiv)
-    
+
     // Notify background script
     await chrome.runtime.sendMessage({
       type: 'USER_STATUS_SAVED',
@@ -2359,11 +2056,11 @@ async function saveUserStatusToStorage(userName, postsInfo) {
 // Handle delete last post request from popup
 async function handleDeleteLastPost(userName) {
   console.log(`Deleting last post for: ${userName}`)
-  
+
   // Show initial delete message
   const statusDiv = createMessageDiv('🗑️', 'Deleting Post', `Finding and deleting last post for ${userName}...`, '#ff5722')
   showTemporaryMessage(statusDiv)
-  
+
   try {
     // First check if account is locked
     if (checkAccountLocked()) {
@@ -2372,16 +2069,16 @@ async function handleDeleteLastPost(userName) {
       showTemporaryMessage(messageDiv)
       return
     }
-    
+
     // Check user posts directly (no navigation needed since we're already on posts page)
     const postsInfo = await checkUserPosts()
-    
+
     if (postsInfo.total === 0) {
       const messageDiv = createMessageDiv('ℹ️', 'No Posts Found', 'No posts found to delete.', '#2196f3')
       showTemporaryMessage(messageDiv)
       return
     }
-    
+
     // Get the most recent post
     const mostRecentPost = postsInfo.posts[0]
     if (!mostRecentPost || !mostRecentPost.element) {
@@ -2389,13 +2086,13 @@ async function handleDeleteLastPost(userName) {
       showTemporaryMessage(messageDiv)
       return
     }
-    
+
     // Attempt to delete the post
     const deleteSuccess = await deletePost(mostRecentPost.element)
     if (deleteSuccess) {
       const messageDiv = createMessageDiv('✅', 'Post Deleted', 'Last post has been successfully deleted!', '#4caf50')
       showTemporaryMessage(messageDiv)
-      
+
       // Notify background script of successful deletion
       chrome.runtime.sendMessage({
         type: 'ACTION_COMPLETED',
@@ -2406,7 +2103,7 @@ async function handleDeleteLastPost(userName) {
     } else {
       const messageDiv = createMessageDiv('❌', 'Delete Failed', 'Could not delete the post. Please try manually.', '#ff5722')
       showTemporaryMessage(messageDiv)
-      
+
       // Notify background script of failed deletion
       chrome.runtime.sendMessage({
         type: 'ACTION_COMPLETED',
@@ -2415,7 +2112,7 @@ async function handleDeleteLastPost(userName) {
         error: 'Could not delete the post'
       }).catch(() => {})
     }
-    
+
   } catch (error) {
     console.error('Error deleting last post:', error)
     const messageDiv = createMessageDiv('❌', 'Error', 'Failed to delete last post.', '#d32f2f')
@@ -2426,7 +2123,7 @@ async function handleDeleteLastPost(userName) {
 // Function to delete a specific post element
 async function deletePost(postElement) {
   console.log('Attempting to delete post element:', postElement)
-  
+
   try {
     // Look for delete/more options button on the post
     const moreOptionsSelectors = [
@@ -2436,7 +2133,7 @@ async function deletePost(postElement) {
       'shreddit-overflow-menu button',
       'shreddit-overflow-menu',
       'button[aria-label*="more options"]',
-      'button[aria-label*="More options"]', 
+      'button[aria-label*="More options"]',
       'button[data-testid="post-menu-trigger"]',
       '[data-testid*="overflow-menu"]',
       'button[aria-haspopup="true"]',
@@ -2448,11 +2145,11 @@ async function deletePost(postElement) {
       '[slot="post-stats-entry-point"] button',
       'button:has(svg)'
     ]
-    
+
     // Look for delete/more options button on the post - check Shadow DOM too
     const findOverflowButton = (element) => {
       console.log('Searching for overflow button in element:', element.tagName)
-      
+
       // First try normal querySelector
       for (const selector of moreOptionsSelectors) {
         const button = element.querySelector(selector)
@@ -2461,11 +2158,11 @@ async function deletePost(postElement) {
           return button
         }
       }
-      
+
       // Then check shadow roots
       const allElements = element.querySelectorAll('*')
       console.log(`Checking ${allElements.length} elements for shadow roots`)
-      
+
       for (const el of allElements) {
         if (el.shadowRoot) {
           console.log(`Found shadow root in element: ${el.tagName}`)
@@ -2478,20 +2175,20 @@ async function deletePost(postElement) {
           }
         }
       }
-      
+
       console.log('No overflow button found in normal DOM or shadow roots')
       return null
     }
-    
+
     let moreButton = findOverflowButton(postElement)
-    
+
     if (moreButton) {
       console.log('Found overflow button using Shadow DOM search')
     }
-    
+
     if (!moreButton) {
       console.log('More options button not found in post, trying alternative approach...')
-      
+
       // Debug: Log all buttons in the post element
       const allButtons = postElement.querySelectorAll('button')
       console.log(`Found ${allButtons.length} buttons in post:`)
@@ -2503,13 +2200,13 @@ async function deletePost(postElement) {
           outerHTML: btn.outerHTML?.substring(0, 200)
         })
       })
-      
+
       // Try to find any button that might be the overflow menu
       for (const btn of allButtons) {
         const ariaLabel = btn.getAttribute('aria-label')?.toLowerCase() || ''
         const className = btn.className?.toLowerCase() || ''
         const innerHTML = btn.innerHTML?.toLowerCase() || ''
-        
+
         if (ariaLabel.includes('more') || ariaLabel.includes('menu') || ariaLabel.includes('options') ||
             className.includes('overflow') || className.includes('menu') ||
             innerHTML.includes('svg') || innerHTML.includes('⋯') || innerHTML.includes('...')) {
@@ -2518,22 +2215,22 @@ async function deletePost(postElement) {
           break
         }
       }
-      
+
       if (!moreButton) {
         console.log('No overflow menu button found in post element')
         return false
       }
     }
-    
+
     // Click the more options button
     moreButton.click()
     await sleep(1500)
-    
+
     // Enhanced search for delete option with retry logic and shadow DOM support
     const findDeleteOption = (root = document) => {
       // Check ALL elements in current root for text match
       const allElements = Array.from(root.querySelectorAll('*')).reverse()
-      
+
       for (const el of allElements) {
         // Skip common non-interactive structural tags
         if (['SCRIPT', 'STYLE', 'HTML', 'BODY', 'HEAD'].includes(el.tagName)) continue
@@ -2542,9 +2239,9 @@ async function deletePost(postElement) {
         const ariaLabel = el.getAttribute('aria-label')?.toLowerCase() || ''
         const testId = el.getAttribute('data-testid')?.toLowerCase() || ''
 
-        // Check for 'delete' keyword 
-        const isDeleteMatch = 
-          text === 'delete' || 
+        // Check for 'delete' keyword
+        const isDeleteMatch =
+          text === 'delete' ||
           (text.includes('delete') && text.length < 20) ||
           ariaLabel.includes('delete') ||
           testId.includes('delete')
@@ -2554,15 +2251,15 @@ async function deletePost(postElement) {
           if (el.offsetParent === null && window.getComputedStyle(el).display === 'none') {
             continue
           }
-          
+
           console.log('Found potential delete element:', el)
-          
+
           // Find closest clickable ancestor
           const clickable = el.closest('button, a, div[role="menuitem"], faceplate-dropdown-menu-item') || el
           return clickable
         }
       }
-      
+
       // Recursively search shadow roots
       const all = Array.from(root.querySelectorAll('*'))
       for (const el of all) {
@@ -2579,7 +2276,7 @@ async function deletePost(postElement) {
     for (let attempts = 0; attempts < 3; attempts++) {
       deleteOption = findDeleteOption()
       if (deleteOption) break
-      
+
       // Also check explicitly for portals which might be outside standard flow
       const portals = document.querySelectorAll('faceplate-portal, .portal, [id*="portal"]')
       for (const portal of portals) {
@@ -2598,11 +2295,11 @@ async function deletePost(postElement) {
         }
       }
       if (deleteOption) break
-      
+
       console.log(`Delete option not found, retrying... (${attempts + 1}/3)`)
       await sleep(1000)
     }
-    
+
     // Fallback: Look for danger elements
     if (!deleteOption) {
       console.log('Standard delete text search failed, looking for danger elements...')
@@ -2611,38 +2308,38 @@ async function deletePost(postElement) {
         deleteOption = dangerElements[0].closest('button, a, div[role="menuitem"]') || dangerElements[0]
       }
     }
-    
+
     if (!deleteOption) {
       console.log('Delete option not found in dropdown menu')
       return false
     }
-    
+
     // Click the delete option
     deleteOption.click()
     await sleep(1500)
-    
+
     // Enhanced search for confirmation button with shadow DOM and portal support
     const findConfirmButton = (root = document) => {
       // Check ALL elements in current root for confirmation text match
       const allElements = Array.from(root.querySelectorAll('*')).reverse()
-      
+
       for (const el of allElements) {
         // Skip common non-interactive structural tags
         if (['SCRIPT', 'STYLE', 'HTML', 'BODY', 'HEAD'].includes(el.tagName)) continue
 
         // Only check button elements for confirmation to avoid matching individual spans
-        const isClickableElement = 
+        const isClickableElement =
           el.tagName === 'BUTTON' ||
           el.tagName === 'A' ||
           (el.tagName === 'DIV' && el.getAttribute('role') === 'button') ||
           el.tagName === 'FACEPLATE-BUTTON' ||
           el.tagName.toLowerCase() === 'faceplate-button'
-        
+
         // Debug logging to see what's being processed
         if (el.textContent?.toLowerCase().includes('delete')) {
           console.log('Debug - Element with delete text:', el.tagName, el, 'Is clickable:', isClickableElement)
         }
-        
+
         if (!isClickableElement) {
           continue
         }
@@ -2652,7 +2349,7 @@ async function deletePost(postElement) {
         const testId = el.getAttribute('data-testid')?.toLowerCase() || ''
 
         // Match confirmation text patterns - be more strict to find actual "Yes, Delete" button
-        const isConfirmMatch = 
+        const isConfirmMatch =
           text === 'yes, delete' ||
           text.includes('yes, delete') ||
           (text.includes('delete') && text.includes('yes')) ||
@@ -2664,15 +2361,15 @@ async function deletePost(postElement) {
           if (el.offsetParent === null && window.getComputedStyle(el).display === 'none') {
             continue
           }
-          
+
           console.log('Found potential confirmation element:', el, 'Text:', text)
-          
+
           // Find closest clickable ancestor
           const clickable = el.closest('button, a, div[role="button"], faceplate-button') || el
           return clickable
         }
       }
-      
+
       // Recursively search shadow roots
       const all = Array.from(root.querySelectorAll('*'))
       for (const el of all) {
@@ -2689,7 +2386,7 @@ async function deletePost(postElement) {
     for (let attempts = 0; attempts < 3; attempts++) {
       confirmButton = findConfirmButton()
       if (confirmButton) break
-      
+
       // Also check explicitly for portals which might contain the confirmation dialog
       const portals = document.querySelectorAll('faceplate-portal, .portal, [id*="portal"], .modal, .overlay')
       for (const portal of portals) {
@@ -2708,20 +2405,20 @@ async function deletePost(postElement) {
         }
       }
       if (confirmButton) break
-      
+
       console.log(`Confirmation button not found, retrying... (${attempts + 1}/3)`)
       await sleep(1000)
     }
-    
+
     if (confirmButton) {
       console.log('Clicking confirmation button to delete post')
       confirmButton.click()
-      
+
       // Wait longer for deletion to process and check multiple times
       let deletionConfirmed = false
       for (let check = 0; check < 5; check++) {
         await sleep(1000)
-        
+
         // Check if post was successfully deleted by seeing if it's still in the DOM
         const postStillExists = document.contains(postElement)
         if (!postStillExists) {
@@ -2729,7 +2426,7 @@ async function deletePost(postElement) {
           deletionConfirmed = true
           break
         }
-        
+
         // Alternative check - look for success message or page change
         const successMessages = document.querySelectorAll('[data-testid*="success"], .success-message, [class*="success"], [role="alert"]')
         for (const msg of successMessages) {
@@ -2739,17 +2436,17 @@ async function deletePost(postElement) {
             break
           }
         }
-        
+
         // Check if we're redirected away from post page
         if (!window.location.href.includes('/comments/') && !window.location.href.includes('/r/')) {
           console.log('Redirected from post page - deletion likely successful')
           deletionConfirmed = true
           break
         }
-        
+
         if (deletionConfirmed) break
       }
-      
+
       if (deletionConfirmed) {
         return true
       } else {
@@ -2760,12 +2457,140 @@ async function deletePost(postElement) {
       console.log('Confirmation button not found')
       return false
     }
-    
+
   } catch (error) {
     console.error('Error in deletePost function:', error)
     return false
   }
 }
+
+// ⚡ AUTOFLOW HELPER: Quick post status check for immediate decisions
+async function quickGetPostStatus(username) {
+  console.log('⚡ Quick post status check for autoflow...')
+  
+  // Look for posts directly on current page
+  const posts = qsAll('shreddit-post[id^="t3_"], [data-testid="post-container"], .Post, [data-testid*="post"]')
+  
+  if (posts.length === 0) {
+    return { 
+      hasPost: false, 
+      decision: 'create',
+      reason: 'no_posts',
+      userName: username 
+    }
+  }
+  
+  // Get the first (most recent) post
+  const firstPost = posts[0]
+  
+  // Quick moderation check
+  const isRemoved = firstPost.textContent?.includes('removed by the moderators') || 
+                   firstPost.querySelector('[icon-name="remove"]') !== null
+  
+  // Quick engagement check  
+  const scoreEl = firstPost.querySelector('[data-testid="post-vote-score"], faceplate-number')
+  const score = parseInt(scoreEl?.textContent?.trim() || '0')
+  
+  // Get post timestamp for age check
+  const timeEl = firstPost.querySelector('time')
+  const timestamp = timeEl?.getAttribute('datetime') || timeEl?.textContent
+  let ageHours = 0
+  
+  if (timestamp) {
+    try {
+      const postDate = new Date(timestamp)
+      ageHours = (Date.now() - postDate.getTime()) / (1000 * 60 * 60)
+    } catch (e) {
+      console.warn('Could not parse timestamp:', timestamp)
+    }
+  }
+  
+  console.log(`⚡ Quick check: removed=${isRemoved}, score=${score}, age=${ageHours.toFixed(1)}h`)
+  
+  // Quick decision logic
+  if (isRemoved) {
+    return { 
+      hasPost: true, 
+      decision: 'create_with_delete', 
+      reason: 'post_removed',
+      lastPost: { isRemoved, score, ageHours },
+      userName: username 
+    }
+  }
+  
+  if (score < 0) {
+    return { 
+      hasPost: true, 
+      decision: 'create_with_delete', 
+      reason: 'post_downvoted',
+      lastPost: { isRemoved, score, ageHours },
+      userName: username 
+    }
+  }
+  
+  if (ageHours < 1) {
+    return { 
+      hasPost: true, 
+      decision: 'wait', 
+      reason: 'recent_post',
+      lastPost: { isRemoved, score, ageHours },
+      userName: username 
+    }
+  }
+  
+  return { 
+    hasPost: true, 
+    decision: 'no_create', 
+    reason: 'post_active',
+    lastPost: { isRemoved, score, ageHours },
+    userName: username 
+  }
+}
+
+// Handle fresh posts request for background decision making
+async function handleGetFreshPostsForDecision(userName) {
+  console.log('[Content Script] Handling GET_FRESH_POSTS_FOR_DECISION for:', userName)
+  
+  try {
+    // Get fresh posts data from the current page
+    const postsInfo = await checkUserPosts()
+    
+    // Normalize the data with userName for the background script
+    const freshData = {
+      userName: userName,
+      postsInfo: postsInfo,
+      lastUpdated: Date.now(),
+      dataFresh: true // Flag to indicate this is fresh data
+    }
+    
+    console.log('[Content Script] Sending fresh posts data to background:', freshData)
+    
+    // Send the fresh data back to background script
+    chrome.runtime.sendMessage({
+      type: 'FRESH_POSTS_COLLECTED',
+      data: freshData
+    }).catch(err => {
+      console.warn('[Content Script] Failed to send fresh posts data:', err)
+    })
+    
+  } catch (error) {
+    console.error('[Content Script] Error getting fresh posts for decision:', error)
+    
+    // Send error response
+    chrome.runtime.sendMessage({
+      type: 'FRESH_POSTS_COLLECTED',
+      data: {
+        userName: userName,
+        error: error.message,
+        dataFresh: false
+      }
+    }).catch(() => {})
+  }
+}
+
+// Export for global access
+window.quickGetPostStatus = quickGetPostStatus
+console.log('⚡ Quick status function available: quickGetPostStatus(username)')
 
 // Export default function for Quasar bridge compatibility
 export default function (bridge) {

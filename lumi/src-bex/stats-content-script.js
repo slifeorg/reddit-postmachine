@@ -29,61 +29,6 @@ async function getStoredUsername() {
   }
 }
 
-async function storeRedditProfileData(username, postsData) {
-  try {
-    console.log(` Storing profile data for ${username} with ${postsData.length} posts`)
-    
-    // Log sample of posts data being stored
-    if (postsData.length > 0) {
-      console.log(' Sample post data being stored:', {
-        title: postsData[0].title,
-        author: postsData[0].author,
-        subreddit: postsData[0].subreddit,
-        score: postsData[0].score,
-        commentCount: postsData[0].commentCount,
-        itemState: postsData[0].itemState
-      })
-    }
-    
-    // Store in local storage for detailed data
-    await chrome.storage.local.set({
-      redditProfileData: {
-        username: username,
-        posts: postsData,
-        lastUpdated: Date.now()
-      }
-    })
-    
-    // Store posts data in the format expected by popup for Status report
-    const storageData = {
-      username: username,
-      posts: postsData,
-      timestamp: Date.now(),
-      totalPosts: postsData.length
-    }
-    
-    await chrome.storage.local.set({
-      latestPostsData: storageData
-    })
-    
-    console.log(` Stored profile data for ${username}: ${postsData.length} posts`)
-    console.log(` Posts data also saved to latestPostsData for Status report`)
-    console.log(' latestPostsData structure:', storageData)
-    
-    // Notify background script
-    chrome.runtime.sendMessage({
-      type: 'POSTS_DATA_UPDATED',
-      data: {
-        username: username,
-        postsCount: postsData.length,
-        lastPost: postsData.length > 0 ? postsData[0] : null
-      }
-    })
-    
-  } catch (error) {
-    console.error(' Failed to store profile data:', error)
-  }
-}
 
 async function storeRedditProfileData(username, postsData) {
   try {
@@ -299,185 +244,6 @@ async function waitForCondition(condition, timeout = 5000) {
   return false
 }
 
-// Targeted debugging function for the specific DOM structure
-function debugSubgridContainer() {
-  console.log('=== DEBUGGING SUBGRID CONTAINER STRUCTURE ===')
-  
-  // Step 1: Find #subgrid-container
-  const subgridContainer = document.querySelector('#subgrid-container')
-  if (!subgridContainer) {
-    console.log('❌ #subgrid-container not found in main DOM')
-    return []
-  }
-  
-  console.log('✅ Found #subgrid-container')
-  
-  // Step 2: Look for div > shreddit-feed within it
-  const div = subgridContainer.querySelector('div')
-  if (!div) {
-    console.log('❌ No direct div child found in #subgrid-container')
-    return []
-  }
-  
-  console.log('✅ Found div in #subgrid-container')
-  
-  // Step 3: Look for shreddit-feed
-  let shredditFeed = div.querySelector('shreddit-feed')
-  
-  // If not found in direct div, search deeper
-  if (!shredditFeed) {
-    console.log('🔍 Searching deeper for shreddit-feed...')
-    const allFeeds = subgridContainer.querySelectorAll('shreddit-feed')
-    if (allFeeds.length > 0) {
-      shredditFeed = allFeeds[0]
-      console.log(`✅ Found shreddit-feed deeper in structure (${allFeeds.length} total)`)
-    }
-  }
-  
-  if (!shredditFeed) {
-    console.log('❌ shreddit-feed not found in #subgrid-container')
-    return []
-  }
-  
-  console.log('✅ Found shreddit-feed')
-  
-  // Step 4: Check if shreddit-feed has shadow root
-  if (shredditFeed.shadowRoot) {
-    console.log('🌑 shreddit-feed has shadow root')
-    const shadowArticles = shredditFeed.shadowRoot.querySelectorAll('article')
-    console.log(`📄 Found ${shadowArticles.length} articles in shadow root`)
-    
-    // Log details of each article
-    shadowArticles.forEach((article, index) => {
-      console.log(`  [${index + 1}] Article: id="${article.id || 'none'}", class="${article.className || 'none'}"`)
-      const postLink = article.querySelector('[data-ks-id^="t3_"]')
-      if (postLink) {
-        console.log(`    -> Has post link: data-ks-id="${postLink.getAttribute('data-ks-id')}"`)
-      }
-    })
-    
-    return Array.from(shadowArticles)
-  } else {
-    console.log('📄 shreddit-feed does NOT have shadow root, searching in normal DOM')
-    const normalArticles = shredditFeed.querySelectorAll('article')
-    console.log(`📄 Found ${normalArticles.length} articles in normal DOM`)
-    
-    // Log details of each article
-    normalArticles.forEach((article, index) => {
-      console.log(`  [${index + 1}] Article: id="${article.id || 'none'}", class="${article.className || 'none'}"`)
-      const postLink = article.querySelector('[data-ks-id^="t3_"]')
-      if (postLink) {
-        console.log(`    -> Has post link: data-ks-id="${postLink.getAttribute('data-ks-id')}"`)
-      }
-    })
-    
-    return Array.from(normalArticles)
-  }
-}
-
-// Aggressive shadow DOM search function for shreddit-post elements
-function findShredditPostsGreedy() {
-  console.log('Starting aggressive search for shreddit-post elements...')
-  const posts = []
-  const visited = new Set()
-  
-  function logNodeStructure(node, depth = 0) {
-    const indent = '  '.repeat(depth)
-    try {
-      if (node === document) {
-        console.log(`${indent}Document`)
-      } else if (node.tagName) {
-        console.log(`${indent}Node: ${node.tagName.toLowerCase()}${node.id ? '#' + node.id : ''}${node.className ? '.' + Array.from(node.classList).join('.') : ''}`)
-      }
-      
-      if (node.shadowRoot) {
-        console.log(`${indent}  Has shadowRoot`)
-        const shadowChildren = node.shadowRoot.querySelectorAll('*')
-        console.log(`${indent}  ShadowRoot has ${shadowChildren.length} direct children`)
-      }
-    } catch (error) {
-      console.log(`${indent}Error logging node:`, error)
-    }
-  }
-  
-  function searchInNode(node, depth = 0) {
-    if (depth > 10) {
-      console.log(`${'  '.repeat(depth)}Max depth reached`)
-      return
-    }
-    if (visited.has(node)) return
-    visited.add(node)
-    
-    console.log(`${'  '.repeat(depth)}Searching at depth ${depth}`)
-    logNodeStructure(node, depth)
-    
-    try {
-      // Find shreddit-post elements in this node
-      const shredditPosts = node.querySelectorAll ? node.querySelectorAll('shreddit-post') : []
-      console.log(`${'  '.repeat(depth)}Found ${shredditPosts.length} shreddit-post elements`)
-      shredditPosts.forEach((post, index) => {
-        if (!posts.includes(post)) {
-          posts.push(post)
-          console.log(`${'  '.repeat(depth)}  [${index + 1}] shreddit-post: id="${post.id || 'none'}", class="${post.className || 'none'}"`)
-        }
-      })
-      
-      // Also check for article elements that might be posts
-      const articles = node.querySelectorAll ? node.querySelectorAll('article') : []
-      console.log(`${'  '.repeat(depth)}Found ${articles.length} article elements`)
-      articles.forEach((article, index) => {
-        const hasPostData = article.querySelector('[data-ks-id^="t3_"]')
-        console.log(`${'  '.repeat(depth)}  [${index + 1}] article: id="${article.id || 'none'}", hasPostData=${!!hasPostData}`)
-        if (!posts.includes(article) && hasPostData) {
-          posts.push(article)
-          console.log(`${'  '.repeat(depth)}    -> Added to posts list`)
-        }
-      })
-      
-      // Recursively search in shadow roots
-      if (node.querySelectorAll) {
-        const allElements = node.querySelectorAll('*')
-        console.log(`${'  '.repeat(depth)}Checking ${allElements.length} elements for shadow roots`)
-        let shadowRootCount = 0
-        for (const el of allElements) {
-          if (el.shadowRoot && !visited.has(el.shadowRoot)) {
-            shadowRootCount++
-            console.log(`${'  '.repeat(depth)}Found shadowRoot in: ${el.tagName.toLowerCase()}${el.id ? '#' + el.id : ''}`)
-            searchInNode(el.shadowRoot, depth + 1)
-          }
-        }
-        console.log(`${'  '.repeat(depth)}Explored ${shadowRootCount} shadow roots`)
-      }
-    } catch (error) {
-      console.warn(`Error searching at depth ${depth}:`, error)
-    }
-  }
-  
-  // Start search from document and all major container elements
-  console.log('=== SEARCHING FROM DOCUMENT ROOT ===')
-  searchInNode(document)
-  
-  // Also search in specific Reddit elements
-  console.log('\n=== SEARCHING SPECIFIC REDDIT ELEMENTS ===')
-  const redditElements = ['shreddit-app', 'shreddit-feed', 'main', '[role="main"]']
-  redditElements.forEach(selector => {
-    console.log(`\n--- Searching for: ${selector} ---`)
-    const elements = document.querySelectorAll(selector)
-    console.log(`Found ${elements.length} elements matching ${selector}`)
-    elements.forEach((el, index) => {
-      console.log(`  [${index + 1}] ${el.tagName.toLowerCase()}${el.id ? '#' + el.id : ''}`)
-      searchInNode(el)
-      if (el.shadowRoot) {
-        console.log(`  -> Has shadowRoot, searching within...`)
-        searchInNode(el.shadowRoot)
-      }
-    })
-  })
-  
-  console.log(`\n=== SEARCH COMPLETE ===`)
-  console.log(`Aggressive search found ${posts.length} total post elements`)
-  return posts
-}
 
 // Focused function to extract data from found shreddit-post elements
 function extractPostDataFromShredditPosts(shredditPosts) {
@@ -634,6 +400,14 @@ function extractPostDataFromShredditPosts(shredditPosts) {
         viewContext: postAttributes.viewContext || '',
         voteType: postAttributes.voteType || '',
         
+        // Enhanced moderation detection
+        moderationStatus: {
+          isRemoved: post.textContent?.includes('removed by the moderators') || 
+                    post.querySelector('[icon-name="remove"]') !== null || false,
+          isLocked: post.querySelector('[icon-name="lock-fill"]') !== null,
+          itemState: postAttributes.itemState || ''
+        },
+        
         // Additional metadata
         userId: postAttributes.userId || '',
         permalink: postAttributes.permalink || ''
@@ -682,6 +456,12 @@ function checkPostStatus(postElement, statusType) {
         return true
       }
     }
+  }
+  
+  // Check for icon-based moderation indicators
+  const moderationIcons = postElement.querySelector('[icon-name="remove"]')
+  if (moderationIcons) {
+    return true
   }
   
   // Check for specific status text patterns
@@ -855,41 +635,150 @@ window.triggerProfileDataCollection = async function() {
 
 console.log('🔧 Manual trigger available: window.triggerProfileDataCollection()')
 
-// Helper method to check post status (same as dom.js)
-function checkPostStatus(postElement, statusType) {
-  const statusClasses = [
-    `[class*="${statusType}"]`,
-    `[class*="moderator"]`,
-    `[data-testid*="${statusType}"]`,
-    '.removed',
-    '.deleted',
-    '.blocked'
-  ]
+// ⚡ TINY REUSABLE FUNCTION: Quick post data collection for autoflow
+async function quickCollectPostData(options = {}) {
+  const { 
+    maxPosts = 3, 
+    timeout = 5000, 
+    includeModeration = true,
+    includeEngagement = true 
+  } = options
   
-  // Check post element and its children for status indicators
-  for (const selector of statusClasses) {
-    const elements = postElement.querySelectorAll(selector)
-    if (elements.length > 0) {
-      // Verify it's not just a class name coincidence
-      const text = elements[0].textContent?.toLowerCase() || ''
-      if (text.includes(statusType) || text.includes('moderator') || text.includes('removed') || text.includes('deleted')) {
-        return true
-      }
+  console.log(`⚡ Quick collecting ${maxPosts} posts with ${timeout}ms timeout`)
+  
+  const startTime = Date.now()
+  
+  while (Date.now() - startTime < timeout) {
+    const shredditApp = document.querySelector('shreddit-app')
+    if (!shredditApp) {
+      await sleep(200)
+      continue
     }
+    
+    const shredditPosts = Array.from(shredditApp.querySelectorAll('shreddit-post[id^="t3_"]')).slice(0, maxPosts)
+    
+    if (shredditPosts.length > 0) {
+      console.log(`⚡ Found ${shredditPosts.length} posts, extracting...`)
+      
+      const posts = shredditPosts.map(post => {
+        const attrs = {
+          id: post.id || '',
+          title: post.getAttribute('post-title') || '',
+          author: post.getAttribute('author') || '',
+          subreddit: post.getAttribute('subreddit-prefixed-name') || '',
+          score: parseInt(post.getAttribute('score') || '0'),
+          commentCount: parseInt(post.getAttribute('comment-count') || '0'),
+          timestamp: post.getAttribute('created-timestamp') || new Date().toISOString(),
+          itemState: post.getAttribute('item-state') || '',
+          postType: post.getAttribute('post-type') || '',
+          permalink: post.getAttribute('permalink') || '',
+          url: post.getAttribute('content-href') || post.getAttribute('permalink') || ''
+        }
+        
+        // Add moderation detection if requested
+        if (includeModeration) {
+          attrs.moderationStatus = {
+            isRemoved: post.textContent?.includes('removed by the moderators') || 
+                      post.querySelector('[icon-name="remove"]') !== null,
+            isLocked: post.querySelector('[icon-name="lock-fill"]') !== null,
+            itemState: attrs.itemState
+          }
+          // Legacy compatibility
+          attrs.isRemoved = attrs.moderationStatus.isRemoved
+          attrs.isBlocked = attrs.moderationStatus.isRemoved
+        }
+        
+        return attrs
+      })
+      
+      console.log(`⚡ Quick collection complete: ${posts.length} posts`)
+      return posts
+    }
+    
+    await sleep(200)
   }
   
-  // Check for specific status text patterns
-  const statusTexts = [
-    'removed by moderator',
-    'deleted by moderator', 
-    'this post has been removed',
-    'post blocked',
-    'moderator action'
-  ]
-  
-  const postText = postElement.textContent?.toLowerCase() || ''
-  return statusTexts.some(statusText => postText.includes(statusText))
+  console.log('⚡ Quick collection timeout - no posts found')
+  return []
 }
+
+// 🎯 SINGLE AUTOFLOW FUNCTION: Fresh post data collection for decision making
+async function getPostsDataForAutoflowDecision(username) {
+  console.log('🎯 Collecting fresh posts data for autoflow decision...')
+  
+  try {
+    // Ensure we're on the submitted page for fresh data
+    if (!window.location.href.includes('/submitted')) {
+      console.log('⚠️ Not on submitted page, navigating...')
+      await navigateToUserProfile(username)
+      await navigateToPostsTab()
+      // Small delay to ensure page loads
+      await new Promise(resolve => setTimeout(resolve, 2000))
+    }
+
+    // 🔧 Use the SAME robust DOM analysis method as the full stats script
+    console.log('🎯 Using full DOM analysis method for reliable data collection...')
+    const posts = await capturePostsData()
+    
+    console.log(`🎯 Full DOM analysis collected ${posts.length} fresh posts for autoflow decision`)
+    
+    if (posts.length === 0) {
+      return {
+        postsInfo: { posts: [], total: 0, lastPost: null },
+        lastPost: null,
+        totalPosts: 0,
+        userName: username,
+        timestamp: new Date().toISOString(),
+        dataFresh: true
+      }
+    }
+    
+    const lastPost = posts[0] // Most recent post
+    
+    return {
+      postsInfo: {
+        posts: posts,
+        total: posts.length,
+        lastPost: lastPost
+      },
+      lastPost: lastPost,
+      totalPosts: posts.length,
+      userName: username,
+      timestamp: new Date().toISOString(),
+      dataFresh: true
+    }
+    
+  } catch (error) {
+    console.error('❌ Error collecting fresh posts data for autoflow:', error)
+    
+    // Fallback to quick collection if navigation fails
+    console.log('🔧 Fallback: Attempting quick collection as last resort...')
+    const posts = await quickCollectPostData({ 
+      maxPosts: 5,
+      timeout: 3000,
+      includeModeration: true,
+      includeEngagement: true 
+    })
+    
+    console.log(`🔧 Fallback collected ${posts.length} posts`)
+    
+    return {
+      postsInfo: { posts: posts, total: posts.length, lastPost: posts[0] || null },
+      lastPost: posts[0] || null,
+      totalPosts: posts.length,
+      userName: username,
+      timestamp: new Date().toISOString(),
+      dataFresh: false,
+      error: error.message
+    }
+  }
+}
+
+// Export for global access
+window.quickCollectPostData = quickCollectPostData
+window.getPostsDataForAutoflowDecision = getPostsDataForAutoflowDecision
+
+console.log('⚡ Autoflow function available: getPostsDataForAutoflowDecision(username)')
 
 async function capturePostsData() {
   console.log('Capturing posts data from current page...')
@@ -1515,6 +1404,28 @@ if (window.location.href.includes('/submit')) {
         
       case 'MANUAL_TRIGGER_SCRIPT':
         handleManualScriptTrigger(message.scriptType, message.mode)
+        break
+        
+      case 'GET_FRESH_POSTS_FOR_DECISION':
+        // 🎯 NEW: Handle fresh posts data collection for autoflow decision
+        console.log('📊 Stats script received GET_FRESH_POSTS_FOR_DECISION for user:', message.userName)
+        getPostsDataForAutoflowDecision(message.userName).then(freshData => {
+          console.log('📊 Stats script collected fresh data, sending response:', freshData)
+          chrome.runtime.sendMessage({
+            type: 'FRESH_POSTS_COLLECTED',
+            data: freshData
+          }).catch(error => {
+            console.error('📊 Failed to send FRESH_POSTS_COLLECTED message:', error)
+          })
+        }).catch(error => {
+          console.error('📊 Error in getPostsDataForAutoflowDecision:', error)
+          chrome.runtime.sendMessage({
+            type: 'FRESH_POSTS_COLLECTED',
+            data: { error: error.message, dataFresh: false }
+          }).catch(sendError => {
+            console.error('📊 Failed to send error response:', sendError)
+          })
+        })
         break
         
       case 'REDDIT_PAGE_LOADED':
