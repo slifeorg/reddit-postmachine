@@ -38,9 +38,9 @@ import {
 } from './message-handlers.js'
 
 import {
-  openOrFocusExtensionTab,
+  getExtensionTab,
   handleTabClosed
-} from './extension-tab-manager.js'
+} from './unified-tab-manager.js'
 
 import {
   AutoFlowStateManager,

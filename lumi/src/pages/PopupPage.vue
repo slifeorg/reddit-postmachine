@@ -52,10 +52,10 @@
       <div v-if="storedUsername" class="text-h6 text-primary">{{ storedUsername }}</div>
 
       <!-- Show status based on username availability -->
-      <div v-if="storedUsername" class="text-caption text-positive">
-        <q-icon name="check_circle" class="q-mr-xs" />
-        Ready to post
-      </div>
+<!--      <div v-if="storedUsername" class="text-caption text-positive">-->
+<!--        <q-icon name="check_circle" class="q-mr-xs" />-->
+<!--        Ready to post-->
+<!--      </div>-->
       <div v-else class="text-caption text-grey-6">
         <q-icon name="account_circle" class="q-mr-xs" />
         No user detected
@@ -153,11 +153,11 @@
 
     </div>
 
-    <div class="q-mt-md text-center">
-      <div class="text-caption text-grey-6">
-        Extension: <span class="text-positive">Connected</span>
-      </div>
-    </div>
+<!--    <div class="q-mt-md text-center">-->
+<!--      <div class="text-caption text-grey-6">-->
+<!--        Extension: <span class="text-positive">Connected</span>-->
+<!--      </div>-->
+<!--    </div>-->
   </q-page>
 </template>
 
@@ -181,13 +181,26 @@ export default defineComponent({
 
     const postsCountText = computed(() => {
       const fromStatus = userStatus.value?.postsCount
-      if (typeof fromStatus === 'number') return fromStatus
+      if (typeof fromStatus === 'number') {
+        console.log('Popup: Using postsCount from userStatus:', fromStatus)
+        return fromStatus
+      }
       const data = postsData.value
       const fromTotal = data?.total
-      if (typeof fromTotal === 'number') return fromTotal
+      if (typeof fromTotal === 'number') {
+        console.log('Popup: Using total from data:', fromTotal)
+        return fromTotal
+      }
       const fromTotalPosts = data?.totalPosts
-      if (typeof fromTotalPosts === 'number') return fromTotalPosts
-      return getPostsArray().length
+      if (typeof fromTotalPosts === 'number') {
+        console.log('Popup: Using totalPosts from data:', fromTotalPosts)
+        return fromTotalPosts
+      }
+      const postsArrayLength = getPostsArray().length
+      console.log('Popup: Using posts array length:', postsArrayLength)
+      console.log('Popup: postsData.value:', data)
+      console.log('Popup: postsInfo?.posts:', data?.postsInfo?.posts)
+      return postsArrayLength
     })
 
     // Computed property for short last post text display
@@ -462,7 +475,10 @@ export default defineComponent({
                 if (result.latestPostsData) {
                     postsData.value = result.latestPostsData;
                     console.log('Popup: Loaded posts data from storage:', result.latestPostsData);
-                    console.log('Popup: Found', result.latestPostsData.posts?.length || 0, 'posts');
+                    console.log('Popup: postsInfo:', result.latestPostsData.postsInfo);
+                    console.log('Popup: postsInfo.posts:', result.latestPostsData.postsInfo?.posts);
+                    console.log('Popup: Found', result.latestPostsData.postsInfo?.posts?.length || 0, 'posts');
+                    console.log('Popup: postsInfo.total:', result.latestPostsData.postsInfo?.total);
                 } else {
                     console.log('Popup: No posts data found in storage');
                     postsData.value = null;
@@ -500,6 +516,12 @@ export default defineComponent({
       loadPostsData()
       loadDecisionReport()
       loadExecutionResult()
+      
+      // Add a delay to ensure we get the latest execution result
+      setTimeout(() => {
+        loadExecutionResult()
+        console.log('Popup: Reloaded execution result after delay')
+      }, 500)
     })
 
     // Listen for messages from content script

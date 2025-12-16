@@ -1,11 +1,10 @@
 <template>
   <q-layout view="lHh Lpr lFf">
     <q-header elevated>
-      <q-toolbar>
-        <q-toolbar-title>
-          Reddit Post Machine
-        </q-toolbar-title>
-      </q-toolbar>
+<!--      <q-toolbar>-->
+<!--        <q-toolbar-title>-->
+<!--        </q-toolbar-title>-->
+<!--      </q-toolbar>-->
     </q-header>
 
     <q-drawer

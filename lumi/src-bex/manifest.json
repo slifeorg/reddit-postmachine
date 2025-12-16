@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Reddit Post Machine",
   "version": "1.0.0",
-  "description": "Automated Reddit posting tool built with Quasar Framework",
+  "description": "Lumi - Reddit Post Machine",
 
   "action": {
     "default_popup": "www/index.html#/popup",
@@ -48,7 +48,8 @@
   "host_permissions": [
     "*://www.reddit.com/*",
     "*://old.reddit.com/*",
-    "https://dev.slife.guru/*"
+    "https://dev.slife.guru/*",
+    "https://32016-51127.bacloud.info/*"
   ],
 
   "icons": {

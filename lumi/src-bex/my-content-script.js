@@ -271,6 +271,12 @@ function initializeRedditIntegration() {
         sendResponse({ started: true })
         break
 
+      case 'REMOVE_BEFOREUNLOAD_LISTENERS':
+        contentLogger.log('[Content Script] Received REMOVE_BEFOREUNLOAD_LISTENERS command')
+        removeBeforeUnloadListeners()
+        sendResponse({ success: true })
+        break
+
       default:
         contentLogger.warn('Unknown message type:', message.type)
     }
@@ -1291,10 +1297,20 @@ async function runProfileDetectionScript() {
   contentLogger.log('=== PROFILE DETECTION SCRIPT STARTED ===')
 
   try {
+    // Wait for page to be ready before attempting username detection
+    await waitForCondition(() => {
+      // Check if user dropdown or other auth indicators are present
+      return document.querySelector('button[data-testid="user-menu-trigger"]') ||
+             document.querySelector('[data-testid="user-avatar"]') ||
+             document.querySelector('.header-user-dropdown') ||
+             qs('a[href*="/u/"]')
+    }, 5000, 500)
+
     // Detect username
     const username = await extractUsernameFromPage()
     if (!username) {
-      contentLogger.log('Profile script: Could not detect username')
+      contentLogger.log('Profile script: Could not detect username - will retry after navigation')
+      // Don't show error message here, just continue with navigation which might help detection
       sessionStorage.removeItem('reddit-post-machine-script-stage')
       return
     }
@@ -1384,12 +1400,62 @@ async function capturePostsData(username) {
         const linkElement = element.querySelector('a[href*="/comments/"]')
 
         if (titleElement) {
+          // Enhanced post structure with full information
           const post = {
+            // Core identifiers (autoflow compatible)
+            elementId: element.getAttribute('id') || '',  // Store ID instead of DOM element
+            element: {  // Keep serializable object for backwards compatibility
+              id: element.getAttribute('id') || '',
+              tagName: element.tagName || 'DIV'
+            },
+            
+            // Core identifiers
+            id: element.getAttribute('id') || '',
             title: titleElement.textContent?.trim() || '',
-            score: scoreElement?.textContent?.trim() || '0',
-            comments: commentsElement?.textContent?.trim() || '0',
             url: linkElement?.href || '',
             timestamp: Date.now(),
+            
+            // Author and subreddit
+            author: username,
+            subreddit: element.getAttribute('subreddit-prefixed-name') || '',
+            
+            // Engagement metrics
+            score: parseInt(scoreElement?.textContent?.trim()) || 0,
+            commentCount: parseInt(commentsElement?.textContent?.trim()) || 0,
+            comments: commentsElement?.textContent?.trim() || '0', // Keep for backwards compatibility
+            
+            // Post content
+            postType: element.getAttribute('post-type') || '',
+            domain: element.getAttribute('domain') || '',
+            contentHref: element.getAttribute('content-href') || '',
+            
+            // Status and moderation
+            itemState: element.getAttribute('item-state') || '',
+            viewContext: element.getAttribute('view-context') || '',
+            voteType: element.getAttribute('vote-type') || '',
+            
+            // Enhanced moderation status (autoflow compatible)
+            moderationStatus: {
+              isRemoved: element.textContent?.includes('removed by the moderators') ||
+                        element.querySelector('[icon-name="remove"]') !== null ||
+                        element.getAttribute('item-state') === 'moderator_removed' || false,
+              isLocked: element.querySelector('[icon-name="lock-fill"]') !== null ||
+                       element.getAttribute('item-state') === 'locked' || false,
+              isDeleted: element.textContent?.includes('deleted by the user') ||
+                        element.querySelector('[icon-name="delete"]') !== null ||
+                        element.getAttribute('item-state') === 'deleted' || false,
+              isSpam: element.getAttribute('item-state') === 'spam' || false,
+              itemState: element.getAttribute('item-state') || '',
+              viewContext: element.getAttribute('view-context') || '',
+              voteType: element.getAttribute('vote-type') || ''
+            },
+            
+            // Additional metadata
+            userId: element.getAttribute('user-id') || '',
+            permalink: element.getAttribute('permalink') || '',
+            createdTimestamp: element.getAttribute('created-timestamp') || Date.now(),
+            
+            // Legacy fields for backwards compatibility
             username: username
           }
           posts.push(post)
@@ -1846,6 +1912,7 @@ window.addEventListener('message', async (event) => {
 
              // We want to store it so the Popup can read it immediately
              const storageData = {
+                 userName: message.payload.userName,
                  postsInfo: data,
                  lastUpdated: Date.now()
              };
@@ -1943,21 +2010,75 @@ async function checkUserPosts() {
   contentLogger.log(`Found ${posts.length} posts`)
 
   if (posts.length > 0) {
-    // Sort posts by date (newest first)
+    // Sort posts by date (newest first) with enhanced data
     const postsWithDates = posts.map(post => {
       const timestamp = post.getAttribute('created-timestamp') ||
         post.querySelector('time, [data-testid="post_timestamp"]')?.getAttribute('datetime') ||
         post.querySelector('span[data-testid="post_timestamp"]')?.textContent ||
         post.querySelector('time')?.getAttribute('datetime')
 
-      // Capture minimal moderation status for deletion decisions
-      const moderationStatus = {
-        isRemoved: post.textContent?.includes('removed by the moderators') || 
-                  post.querySelector('[icon-name="remove"]') !== null || false,
-        isLocked: post.querySelector('[icon-name="lock-fill"]') !== null
+      // Enhanced post structure with full information
+      const enhancedPost = {
+        // Core identifiers (autoflow compatible)
+        elementId: post.getAttribute('id') || '',  // Store ID instead of DOM element
+        element: {  // Keep serializable object for backwards compatibility
+          id: post.getAttribute('id') || '',
+          tagName: post.tagName || 'shreddit-post'
+        },
+        
+        // Core identifiers
+        id: post.getAttribute('id') || '',
+        title: post.getAttribute('post-title') || post.querySelector('h3, [data-testid="post-title"]')?.textContent?.trim() || '',
+        url: post.getAttribute('permalink') || post.querySelector('a[href*="/comments/"]')?.href || '',
+        timestamp: timestamp,
+        
+        // Author and subreddit
+        author: post.getAttribute('author') || '',
+        subreddit: post.getAttribute('subreddit-prefixed-name') || '',
+        authorId: post.getAttribute('author-id') || '',
+        subredditId: post.getAttribute('subreddit-id') || '',
+        
+        // Engagement metrics
+        score: parseInt(post.getAttribute('score')) || 0,
+        commentCount: parseInt(post.getAttribute('comment-count')) || 0,
+        awardCount: parseInt(post.getAttribute('award-count')) || 0,
+        
+        // Post content
+        postType: post.getAttribute('post-type') || '',
+        domain: post.getAttribute('domain') || '',
+        contentHref: post.getAttribute('content-href') || '',
+        
+        // Status and moderation
+        itemState: post.getAttribute('item-state') || '',
+        viewContext: post.getAttribute('view-context') || '',
+        voteType: post.getAttribute('vote-type') || '',
+        
+        // Enhanced moderation status (autoflow compatible)
+        moderationStatus: {
+          isRemoved: post.textContent?.includes('removed by the moderators') ||
+                    post.querySelector('[icon-name="remove"]') !== null ||
+                    post.getAttribute('item-state') === 'moderator_removed' || false,
+          isLocked: post.querySelector('[icon-name="lock-fill"]') !== null ||
+                   post.getAttribute('item-state') === 'locked' || false,
+          isDeleted: post.textContent?.includes('deleted by the user') ||
+                    post.querySelector('[icon-name="delete"]') !== null ||
+                    post.getAttribute('item-state') === 'deleted' || false,
+          isSpam: post.getAttribute('item-state') === 'spam' || false,
+          itemState: post.getAttribute('item-state') || '',
+          viewContext: post.getAttribute('view-context') || '',
+          voteType: post.getAttribute('vote-type') || ''
+        },
+        
+        // Additional metadata
+        userId: post.getAttribute('user-id') || '',
+        permalink: post.getAttribute('permalink') || '',
+        createdTimestamp: post.getAttribute('created-timestamp') || timestamp,
+        
+        // Keep original DOM element for deletion operations (but won't be serialized)
+        _domElement: post
       }
 
-      return { element: post, timestamp, moderationStatus }
+      return enhancedPost
     }).filter(post => post.timestamp)
 
     // Sort by date (newest first)
@@ -1972,10 +2093,21 @@ async function checkUserPosts() {
 
     if (postsWithDates.length > 0) {
       contentLogger.log(`Last post date: ${postsWithDates[0].timestamp}`)
+      
+      // Return posts with enhanced structure
       return {
-        total: posts.length,
+        total: postsWithDates.length,
         lastPostDate: postsWithDates[0].timestamp,
-        posts: postsWithDates
+        posts: postsWithDates.map(post => ({
+          ...post,
+          // Keep the serializable element object for backwards compatibility
+          element: {
+            id: post.element.id,
+            tagName: post.element.tagName
+          },
+          // Include DOM element for deletion operations (separate field)
+          _domElement: post._domElement
+        }))
       }
     }
   } else {
@@ -2023,11 +2155,16 @@ async function saveUserStatusToStorage(userName, postsInfo) {
   // Create user status data object
   const userStatusData = {
     userName: userName,
-    totalPosts: postsInfo.total,
+    currentUser: userName,
+    storedUser: userName,
+    isMatch: true,
+    postsCount: postsInfo.total, // Changed from totalPosts to postsCount
     lastPostDate: postsInfo.lastPostDate,
     lastPostText: lastPostText,
     timestamp: Date.now(),
-    checkUrl: window.location.href
+    checkUrl: window.location.href,
+    lastCheck: Date.now(),
+    statusMessage: 'Posts data collected successfully'
   }
 
   try {
@@ -2038,7 +2175,7 @@ async function saveUserStatusToStorage(userName, postsInfo) {
     contentLogger.log('User status saved to Chrome storage:', userStatusData)
 
     // Show brief success message
-    const messageDiv = createMessageDiv('✅', 'Status Saved', 'User status data saved successfully', '#4caf50')
+    const messageDiv = createMessageDiv('✅', 'Saved', 'User status data saved successfully', '#4caf50')
     showTemporaryMessage(messageDiv)
 
     // Notify background script
@@ -2081,14 +2218,14 @@ async function handleDeleteLastPost(userName) {
 
     // Get the most recent post
     const mostRecentPost = postsInfo.posts[0]
-    if (!mostRecentPost || !mostRecentPost.element) {
+    if (!mostRecentPost || (!mostRecentPost._domElement && !mostRecentPost.element)) {
       const messageDiv = createMessageDiv('❌', 'Post Not Found', 'Could not find the most recent post.', '#ff5722')
       showTemporaryMessage(messageDiv)
       return
     }
 
     // Attempt to delete the post
-    const deleteSuccess = await deletePost(mostRecentPost.element)
+    const deleteSuccess = await deletePost(mostRecentPost._domElement || mostRecentPost.element)
     if (deleteSuccess) {
       const messageDiv = createMessageDiv('✅', 'Post Deleted', 'Last post has been successfully deleted!', '#4caf50')
       showTemporaryMessage(messageDiv)
@@ -2467,35 +2604,35 @@ async function deletePost(postElement) {
 // ⚡ AUTOFLOW HELPER: Quick post status check for immediate decisions
 async function quickGetPostStatus(username) {
   contentLogger.log('⚡ Quick post status check for autoflow...')
-  
+
   // Look for posts directly on current page
   const posts = qsAll('shreddit-post[id^="t3_"], [data-testid="post-container"], .Post, [data-testid*="post"]')
-  
+
   if (posts.length === 0) {
-    return { 
-      hasPost: false, 
+    return {
+      hasPost: false,
       decision: 'create',
       reason: 'no_posts',
-      userName: username 
+      userName: username
     }
   }
-  
+
   // Get the first (most recent) post
   const firstPost = posts[0]
-  
+
   // Quick moderation check
-  const isRemoved = firstPost.textContent?.includes('removed by the moderators') || 
+  const isRemoved = firstPost.textContent?.includes('removed by the moderators') ||
                    firstPost.querySelector('[icon-name="remove"]') !== null
-  
-  // Quick engagement check  
+
+  // Quick engagement check
   const scoreEl = firstPost.querySelector('[data-testid="post-vote-score"], faceplate-number')
   const score = parseInt(scoreEl?.textContent?.trim() || '0')
-  
+
   // Get post timestamp for age check
   const timeEl = firstPost.querySelector('time')
   const timestamp = timeEl?.getAttribute('datetime') || timeEl?.textContent
   let ageHours = 0
-  
+
   if (timestamp) {
     try {
       const postDate = new Date(timestamp)
@@ -2504,67 +2641,93 @@ async function quickGetPostStatus(username) {
       contentLogger.warn('Could not parse timestamp:', timestamp)
     }
   }
-  
+
   contentLogger.log(`⚡ Quick check: removed=${isRemoved}, score=${score}, age=${ageHours.toFixed(1)}h`)
-  
+
   // Quick decision logic
   if (isRemoved) {
-    return { 
-      hasPost: true, 
-      decision: 'create_with_delete', 
+    return {
+      hasPost: true,
+      decision: 'create_with_delete',
       reason: 'post_removed',
       lastPost: { isRemoved, score, ageHours },
-      userName: username 
+      userName: username
     }
   }
-  
+
   if (score < 0) {
-    return { 
-      hasPost: true, 
-      decision: 'create_with_delete', 
+    return {
+      hasPost: true,
+      decision: 'create_with_delete',
       reason: 'post_downvoted',
       lastPost: { isRemoved, score, ageHours },
-      userName: username 
+      userName: username
     }
   }
-  
+
   if (ageHours < 1) {
-    return { 
-      hasPost: true, 
-      decision: 'wait', 
+    return {
+      hasPost: true,
+      decision: 'wait',
       reason: 'recent_post',
       lastPost: { isRemoved, score, ageHours },
-      userName: username 
+      userName: username
     }
   }
-  
-  return { 
-    hasPost: true, 
-    decision: 'no_create', 
+
+  return {
+    hasPost: true,
+    decision: 'no_create',
     reason: 'post_active',
     lastPost: { isRemoved, score, ageHours },
-    userName: username 
+    userName: username
   }
 }
 
 // Handle fresh posts request for background decision making
 async function handleGetFreshPostsForDecision(userName) {
   contentLogger.log('[Content Script] Handling GET_FRESH_POSTS_FOR_DECISION for:', userName)
-  
+
   try {
     // Get fresh posts data from the current page
     const postsInfo = await checkUserPosts()
-    
+
+    // Create serializable version of postsInfo without DOM elements
+    const serializablePostsInfo = {
+      total: postsInfo.total,
+      lastPostDate: postsInfo.lastPostDate,
+      posts: postsInfo.posts.map(post => {
+        // Create a clean serializable post object without DOM elements
+        const { _domElement, ...serializablePost } = post
+        return serializablePost // element is already serializable {id, tagName}
+      })
+    }
+
     // Normalize the data with userName for the background script
     const freshData = {
       userName: userName,
-      postsInfo: postsInfo,
+      postsInfo: serializablePostsInfo,
       lastUpdated: Date.now(),
       dataFresh: true // Flag to indicate this is fresh data
     }
-    
+
     contentLogger.log('[Content Script] Sending fresh posts data to background:', freshData)
+
+    // Also save this fresh data to latestPostsData for consistency
+    const storageData = {
+      userName: userName,
+      postsInfo: serializablePostsInfo,
+      lastUpdated: Date.now()
+    }
     
+    contentLogger.log('[Content Script] About to save storageData:', storageData)
+    contentLogger.log('[Content Script] postsInfo structure:', postsInfo)
+    contentLogger.log('[Content Script] postsInfo.posts length:', postsInfo?.posts?.length)
+    
+    chrome.storage.local.set({ 'latestPostsData': storageData }, () => {
+      contentLogger.log('Fresh posts data saved to local storage during decision-making', storageData)
+    })
+
     // Send the fresh data back to background script
     chrome.runtime.sendMessage({
       type: 'FRESH_POSTS_COLLECTED',
@@ -2572,10 +2735,10 @@ async function handleGetFreshPostsForDecision(userName) {
     }).catch(err => {
       contentLogger.warn('[Content Script] Failed to send fresh posts data:', err)
     })
-    
+
   } catch (error) {
     contentLogger.error('[Content Script] Error getting fresh posts for decision:', error)
-    
+
     // Send error response
     chrome.runtime.sendMessage({
       type: 'FRESH_POSTS_COLLECTED',

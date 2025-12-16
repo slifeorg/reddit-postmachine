@@ -1033,7 +1033,47 @@ Object.assign(RedditDOMHelper, {
       }
       
       // Look for the post options menu (three dots)
-      const optionsButton = targetPost.querySelector('button[aria-label*="Options"], button[aria-label*="More options"], [data-testid="post-dropdown"]');
+      let optionsButton = null;
+      
+      // Try multiple selector strategies for the options button
+      const optionsSelectors = [
+        'button[aria-label*="Options"]',
+        'button[aria-label*="More options"]',
+        'button[aria-label*="more options"]',
+        'button[aria-label*="Post options"]',
+        'button[aria-label*="Open post options menu"]',
+        'button[data-testid="post-dropdown"]',
+        'button[data-click-id="postDropdown"]',
+        'button[id*="post-options"]',
+        'button[class*="more"]',
+        'shreddit-post button:last-child',
+        '[data-testid="post-container"] button:last-child'
+      ];
+      
+      // Find options button by selectors
+      for (const selector of optionsSelectors) {
+        optionsButton = targetPost.querySelector(selector);
+        if (optionsButton) {
+          domLogger.log('[DOM Script] Found options button with selector:', selector);
+          break;
+        }
+      }
+      
+      // Fallback: look for any button that might be the options menu
+      if (!optionsButton) {
+        const allButtons = targetPost.querySelectorAll('button');
+        for (const btn of allButtons) {
+          const ariaLabel = btn.getAttribute('aria-label')?.toLowerCase() || '';
+          if (ariaLabel.includes('option') || 
+              ariaLabel.includes('more') ||
+              btn.querySelector('svg') ||
+              btn.innerHTML.includes('icon')) {
+            optionsButton = btn;
+            domLogger.log('[DOM Script] Found options button by attributes');
+            break;
+          }
+        }
+      }
       
       if (!optionsButton) {
         domLogger.log('[DOM Script] Options button not found for target post');
@@ -1045,7 +1085,45 @@ Object.assign(RedditDOMHelper, {
       await new Promise(resolve => setTimeout(resolve, 500));
       
       // Look for delete option in the dropdown
-      const deleteButton = document.querySelector('button[aria-label*="Delete"], button:has-text("Delete"), [role="menuitem"]:has-text("Delete")');
+      let deleteButton = null;
+      
+      // Try multiple selector strategies for the delete button
+      const deleteSelectors = [
+        'button[aria-label*="Delete"]',
+        'button[aria-label*="delete"]',
+        '[role="menuitem"][aria-label*="Delete"]',
+        '[role="menuitem"][aria-label*="delete"]',
+        'li[role="menuitem"] button',
+        'div[role="menuitem"] button',
+        'button[data-click-id="delete"]',
+        'button[data-testid="delete-post-button"]'
+      ];
+      
+      // Find delete button by selectors
+      for (const selector of deleteSelectors) {
+        deleteButton = document.querySelector(selector);
+        if (deleteButton && (
+          deleteButton.textContent?.toLowerCase().includes('delete') ||
+          deleteButton.getAttribute('aria-label')?.toLowerCase().includes('delete')
+        )) {
+          domLogger.log('[DOM Script] Found delete button with selector:', selector);
+          break;
+        }
+        deleteButton = null;
+      }
+      
+      // Fallback: find by text content
+      if (!deleteButton) {
+        const allButtons = document.querySelectorAll('button, [role="menuitem"]');
+        for (const btn of allButtons) {
+          if (btn.textContent?.toLowerCase().includes('delete') || 
+              btn.getAttribute('aria-label')?.toLowerCase().includes('delete')) {
+            deleteButton = btn;
+            domLogger.log('[DOM Script] Found delete button by text content');
+            break;
+          }
+        }
+      }
       
       if (!deleteButton) {
         domLogger.log('[DOM Script] Delete option not found in dropdown');
@@ -1059,7 +1137,46 @@ Object.assign(RedditDOMHelper, {
       await new Promise(resolve => setTimeout(resolve, 500));
       
       // Look for confirmation dialog and click confirm
-      const confirmButton = document.querySelector('button:has-text("Delete post"), button[aria-label*="Delete post"], button:has-text("Confirm delete")');
+      let confirmButton = null;
+      
+      // Try multiple selector strategies for the confirmation button
+      const confirmSelectors = [
+        'button[aria-label*="Delete post"]',
+        'button[aria-label*="Confirm delete"]',
+        'button[data-click-id="deletePost"]',
+        'button[data-testid="delete-post-confirm-button"]',
+        'button[class*="delete"]',
+        'button[class*="confirm"]'
+      ];
+      
+      // Find confirm button by selectors and text content
+      for (const selector of confirmSelectors) {
+        const buttons = document.querySelectorAll(selector);
+        for (const btn of buttons) {
+          if (btn.textContent?.toLowerCase().includes('delete') || 
+              btn.textContent?.toLowerCase().includes('confirm') ||
+              btn.getAttribute('aria-label')?.toLowerCase().includes('delete') ||
+              btn.getAttribute('aria-label')?.toLowerCase().includes('confirm')) {
+            confirmButton = btn;
+            domLogger.log('[DOM Script] Found confirm button with selector:', selector);
+            break;
+          }
+        }
+        if (confirmButton) break;
+      }
+      
+      // Fallback: find by text content in any button
+      if (!confirmButton) {
+        const allButtons = document.querySelectorAll('button');
+        for (const btn of allButtons) {
+          if (btn.textContent?.toLowerCase().includes('delete post') || 
+              btn.textContent?.toLowerCase().includes('confirm delete')) {
+            confirmButton = btn;
+            domLogger.log('[DOM Script] Found confirm button by text content');
+            break;
+          }
+        }
+      }
       
       if (confirmButton) {
         confirmButton.click();

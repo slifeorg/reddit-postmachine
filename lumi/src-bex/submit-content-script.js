@@ -25,17 +25,17 @@ injectBeforeUnloadBlocker()
 // Remove beforeunload listeners to prevent "Leave site?" dialog
 function removeBeforeUnloadListeners() {
   submitLogger.log('Removing Reddit\'s beforeunload event listeners to prevent "Leave site?" dialog')
-  
+
   // Remove window onbeforeunload handler
   window.onbeforeunload = null
-  
+
   // Intercept beforeunload in capture phase and stop any handlers from running.
   // Do not call preventDefault / set returnValue here, since that can itself trigger the prompt.
   window.addEventListener('beforeunload', (e) => {
     if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation()
     if (typeof e.stopPropagation === 'function') e.stopPropagation()
   }, true)
-  
+
   submitLogger.log('Beforeunload listeners disabled successfully')
 }
 
@@ -76,7 +76,7 @@ async function fetchPostDataForSubmission() {
       submitLogger.log('Using stored post data for submission:', postData)
       return postData
     }
-    
+
     // If no stored data, this means the script is running without proper initialization
     // This should not happen in normal flow since background script provides the data
     throw new Error('No post data found - script may be running incorrectly')
@@ -91,30 +91,30 @@ async function fetchPostDataForSubmission() {
 // Submit page functions
 async function ensureSubmitPageReady() {
   submitLogger.log('Ensuring submit page is ready...')
-  
+
   // Wait for key elements to be available
   let attempts = 0
   const maxAttempts = 10
-  
+
   while (attempts < maxAttempts) {
     const submitForm = qs('form') || qs('[data-testid*="post"]') || qs('shreddit-post-composer')
     if (submitForm) {
       submitLogger.log('Submit page is ready')
       return true
     }
-    
+
     submitLogger.log(`Waiting for submit page... attempt ${attempts + 1}/${maxAttempts}`)
     await sleep(1000)
     attempts++
   }
-  
+
   submitLogger.log('Submit page failed to load within timeout')
   return false
 }
 
 async function fillTitle(postData) {
   submitLogger.log('Filling title field...')
-  
+
   // Helper function for shadow DOM queries
   function deepQuery(selector, root = document) {
     const el = root.querySelector(selector)
@@ -127,7 +127,7 @@ async function fillTitle(postData) {
     }
     return null
   }
-  
+
   try {
     // Fill title field using shadow DOM (from postm-page.js)
     const titleInputElement = deepQuery('faceplate-textarea-input[name="title"]')
@@ -157,12 +157,12 @@ async function fillTitle(postData) {
 
 async function fillUrl(postData) {
   submitLogger.log('Filling URL field...')
-  
+
   // Remove beforeunload listeners before modifying form
   if (typeof removeBeforeUnloadListeners === 'function') {
     removeBeforeUnloadListeners()
   }
-  
+
   // Helper function for shadow DOM queries
   function deepQuery(selector, root = document) {
     const el = root.querySelector(selector)
@@ -175,7 +175,7 @@ async function fillUrl(postData) {
     }
     return null
   }
-  
+
   try {
     // Fill URL field using shadow DOM (from postm-page.js)
     submitLogger.log('URL fill attempt - postData.url:', postData?.url)
@@ -212,7 +212,7 @@ async function fillUrl(postData) {
 
 async function fillBody(postData) {
   submitLogger.log('Filling body text...')
-  
+
   // Helper function for shadow DOM queries
   function deepQuery(selector, root = document) {
     const el = root.querySelector(selector)
@@ -225,32 +225,32 @@ async function fillBody(postData) {
     }
     return null
   }
-  
+
   try {
     // Fill body field using multiple possible selectors
     if (postData.body) {
       submitLogger.log('Looking for body text field with updated selectors...')
-      
+
       // Helper function to filter out title field
       function isTitleField(element) {
         if (!element) return false
         const parent = element.closest('faceplate-textarea-input[name="title"]')
         return !!parent
       }
-      
+
       // Wait a bit for lazy-loaded body field after title is filled
       await sleep(1000)
-      
+
       // Try multiple possible body field selectors
       let bodyComposer = null
       let bodyEditable = null
-      
+
       // Method 1: Original selector (updated to match actual DOM)
       bodyComposer = deepQuery('shreddit-composer[name="body"]')
       if (bodyComposer) {
         bodyEditable = bodyComposer.querySelector('div[contenteditable="true"][data-lexical-editor="true"]')
       }
-      
+
       // Method 2: Try different composer selectors
       if (!bodyEditable) {
         const composerSelectors = [
@@ -259,7 +259,7 @@ async function fillBody(postData) {
           '[data-testid="composer"]',
           '.public-DraftEditor-content'
         ]
-        
+
         for (const selector of composerSelectors) {
           const composer = deepQuery(selector)
           if (composer) {
@@ -268,7 +268,7 @@ async function fillBody(postData) {
               composer.querySelector('[contenteditable="true"]'),
               composer.querySelector('.public-DraftEditor-content')
             ]
-            
+
             for (const candidate of candidates) {
               if (candidate && !isTitleField(candidate)) {
                 bodyEditable = candidate
@@ -280,7 +280,7 @@ async function fillBody(postData) {
           }
         }
       }
-      
+
       // Method 3: Look for any contenteditable div in the submit form
       if (!bodyEditable) {
         const submitForm = qs('form') || qs('[data-testid*="post"]') || qs('shreddit-post-composer')
@@ -289,7 +289,7 @@ async function fillBody(postData) {
             submitForm.querySelector('div[contenteditable="true"]'),
             submitForm.querySelector('[data-lexical-editor="true"]')
           ]
-          
+
           for (const candidate of candidates) {
             if (candidate && !isTitleField(candidate)) {
               bodyEditable = candidate
@@ -299,22 +299,22 @@ async function fillBody(postData) {
           }
         }
       }
-      
+
       // If still not found, try polling for a few seconds
       if (!bodyEditable) {
         submitLogger.log('Body field not immediately available, polling for up to 5 seconds...')
         const maxPollAttempts = 10
         const pollInterval = 500
-        
+
         for (let attempt = 0; attempt < maxPollAttempts; attempt++) {
           await sleep(pollInterval)
-          
+
           // Retry all methods
           const bodyComposer = deepQuery('shreddit-composer[name="body"]')
           if (bodyComposer) {
             bodyEditable = bodyComposer.querySelector('div[contenteditable="true"][data-lexical-editor="true"]')
           }
-          
+
           if (!bodyEditable) {
             const submitForm = qs('form') || qs('[data-testid*="post"]') || qs('shreddit-post-composer')
             if (submitForm) {
@@ -322,7 +322,7 @@ async function fillBody(postData) {
                 submitForm.querySelector('div[contenteditable="true"]'),
                 submitForm.querySelector('[data-lexical-editor="true"]')
               ]
-              
+
               for (const candidate of candidates) {
                 if (candidate && !isTitleField(candidate)) {
                   bodyEditable = candidate
@@ -332,23 +332,23 @@ async function fillBody(postData) {
               }
             }
           }
-          
+
           if (bodyEditable) break
         }
       }
-      
+
       if (bodyEditable) {
         submitLogger.log('Found body text editor, setting text...')
         bodyEditable.focus()
         await sleep(500)
-        
+
         // Clear and set body text character by character
         bodyEditable.innerHTML = '<p><br></p>'
         const text = postData.body
-        
+
         for (let i = 0; i < text.length; i++) {
           const char = text[i]
-          
+
           if (document.execCommand && document.execCommand('insertText', false, char)) {
           } else {
             const selection = window.getSelection()
@@ -363,17 +363,17 @@ async function fillBody(postData) {
               selection.addRange(range)
             }
           }
-          
+
           bodyEditable.dispatchEvent(new InputEvent('input', {
             inputType: 'insertText',
             data: char,
             bubbles: true,
             cancelable: true
           }))
-          
+
           await sleep(10)
         }
-        
+
         bodyEditable.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }))
         submitLogger.log('Body text set successfully')
         await sleep(1500)
@@ -418,19 +418,19 @@ async function clickBodyField() {
       const parent = element.closest('faceplate-textarea-input[name="title"]')
       return !!parent
     }
-    
+
     // Wait a bit for lazy-loaded body field
     await sleep(1000)
-    
+
     // Try multiple possible body field selectors (same as fillBody)
     let bodyEditable = null
-    
+
     // Method 1: Original selector (updated to match actual DOM)
     const bodyComposer = deepQuery('shreddit-composer[name="body"]')
     if (bodyComposer) {
       bodyEditable = bodyComposer.querySelector('div[contenteditable="true"][data-lexical-editor="true"]')
     }
-    
+
     // Method 2: Try different composer selectors
     if (!bodyEditable) {
       const composerSelectors = [
@@ -439,7 +439,7 @@ async function clickBodyField() {
         '[data-testid="composer"]',
         '.public-DraftEditor-content'
       ]
-      
+
       for (const selector of composerSelectors) {
         const composer = deepQuery(selector)
         if (composer) {
@@ -448,7 +448,7 @@ async function clickBodyField() {
             composer.querySelector('[contenteditable="true"]'),
             composer.querySelector('.public-DraftEditor-content')
           ]
-          
+
           for (const candidate of candidates) {
             if (candidate && !isTitleField(candidate)) {
               bodyEditable = candidate
@@ -460,7 +460,7 @@ async function clickBodyField() {
         }
       }
     }
-    
+
     // Method 3: Look for any contenteditable div in the submit form
     if (!bodyEditable) {
       const submitForm = qs('form') || qs('[data-testid*="post"]') || qs('shreddit-post-composer')
@@ -469,7 +469,7 @@ async function clickBodyField() {
           submitForm.querySelector('div[contenteditable="true"]'),
           submitForm.querySelector('[data-lexical-editor="true"]')
         ]
-        
+
         for (const candidate of candidates) {
           if (candidate && !isTitleField(candidate)) {
             bodyEditable = candidate
@@ -479,22 +479,22 @@ async function clickBodyField() {
         }
       }
     }
-    
+
     // If still not found, try polling for a few seconds
     if (!bodyEditable) {
       submitLogger.log('Body field not immediately available, polling for up to 5 seconds...')
       const maxPollAttempts = 10
       const pollInterval = 500
-      
+
       for (let attempt = 0; attempt < maxPollAttempts; attempt++) {
         await sleep(pollInterval)
-        
+
         // Retry all methods
         const bodyComposer = deepQuery('shreddit-composer[name="body"]')
         if (bodyComposer) {
           bodyEditable = bodyComposer.querySelector('div[contenteditable="true"][data-lexical-editor="true"]')
         }
-        
+
         if (!bodyEditable) {
           const submitForm = qs('form') || qs('[data-testid*="post"]') || qs('shreddit-post-composer')
           if (submitForm) {
@@ -502,7 +502,7 @@ async function clickBodyField() {
               submitForm.querySelector('div[contenteditable="true"]'),
               submitForm.querySelector('[data-lexical-editor="true"]')
             ]
-            
+
             for (const candidate of candidates) {
               if (candidate && !isTitleField(candidate)) {
                 bodyEditable = candidate
@@ -512,7 +512,7 @@ async function clickBodyField() {
             }
           }
         }
-        
+
         if (bodyEditable) break
       }
     }
@@ -550,7 +550,7 @@ async function clickBodyField() {
 
 async function clickTab(tabValue) {
   submitLogger.log(`Clicking tab with data-select-value="${tabValue}"`)
-  
+
   // Helper function for shadow DOM queries
   function deepQuery(selector, root = document) {
     const el = root.querySelector(selector)
@@ -563,7 +563,7 @@ async function clickTab(tabValue) {
     }
     return null
   }
-  
+
   const tab = deepQuery(`[data-select-value="${tabValue}"]`)
   if (tab) {
     tab.click()
@@ -576,7 +576,7 @@ async function clickTab(tabValue) {
 
 async function handleRuleViolationDialog() {
   submitLogger.log('Checking for rule violation dialog after submit...')
-  
+
   // Helper function for shadow DOM queries
   function deepQuery(selector, root = document) {
     const el = root.querySelector(selector)
@@ -589,16 +589,16 @@ async function handleRuleViolationDialog() {
     }
     return null
   }
-  
+
   try {
     // Poll for dialog for up to 10 seconds
     const maxAttempts = 20
     const pollInterval = 500
     let dialogFound = false
-    
+
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       await sleep(pollInterval)
-      
+
       // Look for dialog with rule violation text
       const dialogSelectors = [
         '[role="dialog"]',
@@ -608,19 +608,19 @@ async function handleRuleViolationDialog() {
         'shreddit-modal',
         '.rule-violation-dialog'
       ]
-      
+
       let dialog = null
       for (const selector of dialogSelectors) {
         dialog = qs(selector) || deepQuery(selector)
         if (dialog) break
       }
-      
+
       if (!dialog) {
         continue // Try next attempt
       }
-      
+
       dialogFound = true
-      
+
       // Check if dialog contains rule violation text
       const dialogText = dialog.textContent?.toLowerCase() || ''
       const ruleViolationIndicators = [
@@ -631,21 +631,21 @@ async function handleRuleViolationDialog() {
         'submit without editing',
         'edit post'
       ]
-      
-      const isRuleViolationDialog = ruleViolationIndicators.some(indicator => 
+
+      const isRuleViolationDialog = ruleViolationIndicators.some(indicator =>
         dialogText.includes(indicator.toLowerCase())
       )
-      
+
       if (!isRuleViolationDialog) {
         submitLogger.log('Dialog found but not a rule violation dialog')
         continue // Keep looking for the right dialog
       }
-      
+
       submitLogger.log('Rule violation dialog detected, looking for "Submit without editing" button...')
-      
+
       // Look for "Submit without editing" button with comprehensive search
       let submitButton = null
-      
+
       // Try text-based search first (most reliable)
       const allButtons = dialog.querySelectorAll('button')
       for (const button of allButtons) {
@@ -655,7 +655,7 @@ async function handleRuleViolationDialog() {
           break
         }
       }
-      
+
       // Also search in shadow DOMs within the dialog
       if (!submitButton) {
         for (const elem of dialog.querySelectorAll('*')) {
@@ -672,7 +672,7 @@ async function handleRuleViolationDialog() {
           }
         }
       }
-      
+
       // If not found by text, try attribute-based selectors
       if (!submitButton) {
         const submitWithoutEditingSelectors = [
@@ -680,24 +680,24 @@ async function handleRuleViolationDialog() {
           '.submit-without-editing',
           'button[type="submit"]'
         ]
-        
+
         for (const selector of submitWithoutEditingSelectors) {
           submitButton = dialog.querySelector(selector) || deepQuery(selector, dialog)
           if (submitButton) break
         }
       }
-      
+
       if (submitButton) {
         submitLogger.log('Found "Submit without editing" button, clicking...')
         submitButton.click()
-        
+
         // Wait for dialog to close and verify submission completion
         await sleep(2000)
-        
+
         // Check if dialog is gone and we're no longer on submit page (indicates success)
         const dialogStillExists = qs(dialogSelectors[0]) || deepQuery(dialogSelectors[0])
         const stillOnSubmitPage = window.location.href.includes('/submit')
-        
+
         if (!dialogStillExists && !stillOnSubmitPage) {
           submitLogger.log('Rule violation dialog handled successfully - submission completed')
           return true // Success
@@ -722,14 +722,14 @@ async function handleRuleViolationDialog() {
         continue
       }
     }
-    
+
     if (dialogFound) {
       submitLogger.log('Rule violation dialog was found but could not be handled within timeout period')
     } else {
       submitLogger.log('No rule violation dialog found within timeout period')
     }
     return false // No dialog appeared or couldn't be handled
-    
+
   } catch (error) {
     submitLogger.error('Error handling rule violation dialog:', error)
     return false
@@ -738,7 +738,7 @@ async function handleRuleViolationDialog() {
 
 async function submitPost() {
   submitLogger.log('Submitting post...')
-  
+
   // Helper function for shadow DOM queries
   function deepQuery(selector, root = document) {
     const el = root.querySelector(selector)
@@ -751,7 +751,7 @@ async function submitPost() {
     }
     return null
   }
-  
+
   try {
     // Check if post button is active (from postm-page.js)
     const checkButtonActive = () => {
@@ -838,41 +838,41 @@ async function submitPost() {
 // Main post submission script
 async function runPostSubmissionScript(skipTabStateCheck = false) {
   submitLogger.log('=== POST SUBMISSION SCRIPT STARTED ===')
-  
+
   // Remove beforeunload listeners to prevent "Leave site?" dialog
   removeBeforeUnloadListeners()
-  
+
   try {
     // Check if this tab was created by background script to prevent duplicate execution
     if (!skipTabStateCheck) {
       const tabStateResponse = await chrome.runtime.sendMessage({
         type: 'GET_TAB_STATE'
       })
-      
+
       if (tabStateResponse.success && tabStateResponse.isBackgroundPostTab) {
         submitLogger.log('Skipping auto-run post submission - this tab was created by background script')
         return
       }
     }
-    
+
     // Ensure page is fully loaded and operable
     await ensureSubmitPageReady()
-    
+
     // Fetch post data
     const postData = await fetchPostDataForSubmission()
     if (!postData) {
       submitLogger.log('Post submission script: No post data available')
       return
     }
-    
+
     submitLogger.log('Post submission script: Got post data:', postData.title)
-    
+
     // Determine post type and stay on appropriate tab
     const isLinkPost = postData.url && postData.url.trim()
     const targetTab = isLinkPost ? 'LINK' : 'TEXT'
-    
+
     submitLogger.log(`=== Submitting as ${targetTab} post ===`)
-    
+
     // === STEP 1: Go to target tab and fill title ===
     submitLogger.log(`=== STEP 1: ${targetTab} TAB - Filling title ===`)
     if (await clickTab(targetTab)) {
@@ -905,19 +905,49 @@ async function runPostSubmissionScript(skipTabStateCheck = false) {
     // === STEP 6: Clicking Post button ===
     submitLogger.log('=== STEP 6: Clicking Post button ===')
     const submitSuccess = await submitPost()
-    
+
     if (submitSuccess) {
       submitLogger.log('Post submitted successfully, waiting 10 seconds...')
       await sleep(10000)
-      
+
+      // After redirect, capture the final URL as the Reddit post URL
+      const redditUrl = window.location.href
+      let redditPostId = null
+
+      try {
+        // Lightweight copy of the ID extraction patterns from dom.js
+        const patterns = [
+          /^t3_([a-z0-9]+)$/i,
+          /\/comments\/([a-z0-9]+)/i,
+          /\/r\/[^\/]+\/comments\/([a-z0-9]+)/i,
+          /id=([a-z0-9]+)/i
+        ]
+
+        for (const pattern of patterns) {
+          const match = redditUrl && redditUrl.match(pattern)
+          if (match && match[1]) {
+            redditPostId = match[1]
+            break
+          }
+        }
+      } catch (e) {
+        submitLogger.warn('Failed to extract Reddit post ID from URL:', redditUrl, e)
+      }
+
+      submitLogger.log('Captured Reddit post URL/ID after submission:', { redditUrl, redditPostId })
+
       // Clear post data to prevent reuse
       sessionStorage.removeItem('reddit-post-machine-postdata')
-      
-      // Notify background script of completion
+
+      // Notify background script of completion and pass Reddit URL/ID for Frappe sync
       chrome.runtime.sendMessage({
         type: 'ACTION_COMPLETED',
         action: 'POST_CREATION_COMPLETED',
-        success: true
+        success: true,
+        data: {
+          redditUrl,
+          redditPostId
+        }
       }).catch(() => {})
     } else {
       submitLogger.log('Post submission failed')
@@ -931,9 +961,9 @@ async function runPostSubmissionScript(skipTabStateCheck = false) {
       // Clear post data even on failure to prevent retry loops
       sessionStorage.removeItem('reddit-post-machine-postdata')
     }
-    
+
     submitLogger.log('=== POST SUBMISSION SCRIPT COMPLETED ===')
-    
+
   } catch (error) {
     submitLogger.error('Post submission script error:', error)
     // Notify background script of error
@@ -949,7 +979,7 @@ async function runPostSubmissionScript(skipTabStateCheck = false) {
 // Handle manual script trigger from background/popup
 async function handleManualScriptTrigger(scriptType, mode) {
   submitLogger.log(`=== MANUAL TRIGGER: ${scriptType} (mode: ${mode}) ===`)
-  
+
   try {
     if (scriptType === 'post') {
       // Clear any existing script stage for manual execution
@@ -967,7 +997,7 @@ async function handleManualScriptTrigger(scriptType, mode) {
 // Handle start post creation from background script
 function handleStartPostCreation(userName, postData) {
   submitLogger.log(`Starting post creation for user: ${userName}`, postData)
-  
+
   // Check if already on submit page - if so, don't create new tab
   if (window.location.href.includes('/submit')) {
     submitLogger.log('Already on submit page, storing post data and triggering submission')
@@ -978,24 +1008,24 @@ function handleStartPostCreation(userName, postData) {
     runPostSubmissionScript(true)
     return
   }
-  
+
   if (postData) {
       sessionStorage.setItem('reddit-post-machine-postdata', JSON.stringify(postData));
   }
-  
+
   // Check if user is logged in first
   submitLogger.log('Checking if user is logged in using proven method...')
-  
+
   // Look for the avatar button that would indicate logged in state
   const avatarButton = qs('rpl-dropdown div, [data-testid="user-avatar"], button[aria-label*="user"], #expand-user-drawer-button')
-  
+
   if (avatarButton) {
     submitLogger.log('Found user avatar button - user is logged in')
   } else {
     submitLogger.log('User avatar button not found - user may not be logged in')
     return
   }
-  
+
   // Request background script to create new tab instead of navigating
   submitLogger.log('Requesting background script to create new post tab')
   chrome.runtime.sendMessage({
@@ -1015,16 +1045,16 @@ function handleStartPostCreation(userName, postData) {
 // Message listener
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   submitLogger.log('Submit script received message:', message)
-  
+
   switch (message.type) {
     case 'START_POST_CREATION':
       handleStartPostCreation(message.userName, message.postData)
       break
-      
+
     case 'MANUAL_TRIGGER_SCRIPT':
       handleManualScriptTrigger(message.scriptType, message.mode)
       break
-      
+
     case 'DELETE_LAST_POST':
       // Submit script delegates delete operations to main content script
       submitLogger.log('Submit script: DELETE_LAST_POST not supported on submit page, delegating...')
@@ -1035,7 +1065,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         error: 'Delete operations must be performed on user profile pages'
       }).catch(() => {})
       break
-      
+
     default:
       // Silently ignore messages not intended for submit script
       return

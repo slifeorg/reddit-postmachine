@@ -14,27 +14,30 @@ export class PostDataService {
     const maxRetries = 3
     const retryDelay = 1000 // 1 second base delay
 
+    // Remove u/ prefix if present
+    const cleanAgentName = agentName.replace(/^u\//, '')
+
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
         postServiceLogger.log(
-          `[PostDataService] Generating post for agent: ${agentName} (attempt ${attempt}/${maxRetries})`
+          `[PostDataService] Generating post for agent: ${cleanAgentName} (attempt ${attempt}/${maxRetries})`
         )
 
         // Get API configuration from storage
         const storageResult = await chrome.storage.sync.get(['apiConfig'])
         const apiConfig = storageResult.apiConfig || {
           endpoint:
-            'https://dev.slife.guru/api/method/reddit_postmachine.reddit_postmachine.doctype.subreddit_template.subreddit_template.generate_post_for_agent',
-          token: '8fbbf0a7c626e18:e8e4a08a650a5fb'
+            'https://32016-51127.bacloud.info/api/method/reddit_postmachine.reddit_postmachine.doctype.subreddit_template.subreddit_template.generate_post_for_agent',
+         	 token: '8fbbf0a7c626e18:2c3693fb52ac66f'
         }
 
         const requestBody = {
-          agent_name: agentName
+          agent_name: cleanAgentName
         }
 
         postServiceLogger.log('[PostDataService] API Request Details:', {
           endpoint: apiConfig.endpoint,
-          agentName: agentName,
+          agentName: cleanAgentName,
           body: requestBody
         })
 
@@ -70,7 +73,7 @@ export class PostDataService {
 
           // Second API call to get full post data using Frappe REST API
           const postName = data.message.post_name
-          const frappeEndpoint = `https://dev.slife.guru/api/resource/Reddit%20Post/${postName}`
+          const frappeEndpoint = `https://32016-51127.bacloud.info/api/resource/Reddit%20Post/${postName}`
 
           const frappeResponse = await fetch(frappeEndpoint, {
             method: 'GET',
@@ -156,6 +159,25 @@ export class PostDataService {
     // Save state before decision analysis
     await AutoFlowStateManager.saveState('analyzing_posts', { postsData, userName: postsData?.userName })
 
+    // Check if there's a recently deleted post to filter out
+    const userName = postsData?.userName
+    let deletedPostId = null
+    if (userName) {
+      const deletedPostKey = `deletedPost_${userName}`
+      const deletedPostData = await chrome.storage.local.get([deletedPostKey])
+      if (deletedPostData[deletedPostKey]) {
+        const deletedInfo = deletedPostData[deletedPostKey]
+        // Only consider it if deleted within last 10 minutes
+        if (Date.now() - deletedInfo.timestamp < 10 * 60 * 1000) {
+          deletedPostId = deletedInfo.postId
+          postServiceLogger.log(`[PostDataService] 🗑️ Filtering out recently deleted post: ${deletedPostId}`)
+        } else {
+          // Clean up old deleted post record
+          await chrome.storage.local.remove([deletedPostKey])
+        }
+      }
+    }
+
     // Create decision report for logging and storage
     const decisionReport = {
       timestamp: new Date().toISOString(),
@@ -170,16 +192,26 @@ export class PostDataService {
     postServiceLogger.log('=== AUTO-FLOW DECISION ANALYSIS ===')
     postServiceLogger.log(`[PostDataService] Analyzing ${decisionReport.totalPosts} posts for auto-flow decision`)
 
+    // Filter out the deleted post if present
+    let postsToAnalyze = postsData?.postsInfo?.posts || []
+    if (deletedPostId && postsToAnalyze.length > 0) {
+      const originalLength = postsToAnalyze.length
+      postsToAnalyze = postsToAnalyze.filter(post => post.id !== deletedPostId)
+      if (postsToAnalyze.length !== originalLength) {
+        postServiceLogger.log(`[PostDataService] 🗑️ Filtered out deleted post. Posts before: ${originalLength}, after: ${postsToAnalyze.length}`)
+      }
+    }
+
     // Analyze posts to determine if new post is needed
-    if (!postsData || !postsData.postsInfo || !postsData.postsInfo.posts || postsData.postsInfo.posts.length === 0) {
-      postServiceLogger.log('[PostDataService] ❌ DECISION: No posts found, should create new post')
+    if (!postsData || !postsData.postsInfo || postsToAnalyze.length === 0) {
+      postServiceLogger.log('[PostDataService] ❌ DECISION: No posts found (after filtering deleted post), should create new post')
       decisionReport.decision = 'create'
       decisionReport.reason = 'no_posts'
       this.saveDecisionReport(decisionReport)
       return { shouldCreate: true, reason: 'no_posts', decisionReport }
     }
 
-    const lastPost = postsData.postsInfo.posts[0] // Most recent post
+    const lastPost = postsToAnalyze[0] // Most recent post after filtering
     const now = new Date()
     const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
 
@@ -201,7 +233,7 @@ export class PostDataService {
       `   - Post Type: ${lastPost.postType || 'Unknown'} | Domain: ${lastPost.domain || 'N/A'}`
     )
     postServiceLogger.log(
-      `   - Status: Removed=${lastPost.isRemoved}, Blocked=${lastPost.isBlocked}, Deleted=${lastPost.deleted}`
+      `   - Status: Removed=${lastPost.moderationStatus.isRemoved}, Blocked=${lastPost.moderationStatus.isBlocked}, Deleted=${lastPost.deleted}`
     )
     postServiceLogger.log(
       `   - Item State: ${lastPost.itemState || 'Unknown'} | View Context: ${lastPost.viewContext || 'Unknown'}`
@@ -209,14 +241,26 @@ export class PostDataService {
 
     // Enhanced decision logic using new metadata
 
-    // Priority 1: Check if last post is removed or blocked by moderators - HIGHEST PRIORITY
-    if (lastPost.isRemoved || lastPost.isBlocked || lastPost.hasModeratorAction) {
-      postServiceLogger.log('[PostDataService] 🚫 DECISION: Last post was removed/blocked/moderated, should create new post and delete it')
-      decisionReport.decision = 'create_with_delete'
-      decisionReport.reason = 'post_removed'
-      decisionReport.lastPostStatus = lastPost.isRemoved ? 'removed' : lastPost.isBlocked ? 'blocked' : 'moderated'
-      this.saveDecisionReport(decisionReport)
-      return { shouldCreate: true, reason: 'post_removed', lastPost: lastPost, decisionReport }
+    // Priority 1: Check if last post is removed or blocked by moderators
+    // If removed by moderators, we should delete it first before creating a new post
+    if (lastPost.moderationStatus.isRemoved || lastPost.moderationStatus.isBlocked || lastPost.hasModeratorAction) {
+      if (lastPost.moderationStatus.isRemoved) {
+        // Post is removed by moderators, delete it first before creating new post
+        postServiceLogger.log('[PostDataService] 🗑️ DECISION: Last post was removed by moderators, should delete it first then create new post')
+        decisionReport.decision = 'create_with_delete'
+        decisionReport.reason = 'post_removed_by_moderator'
+        decisionReport.lastPostStatus = 'removed'
+        this.saveDecisionReport(decisionReport)
+        return { shouldCreate: true, reason: 'post_removed_by_moderator', lastPost: lastPost, decisionReport }
+      } else {
+        // Post is blocked or has other moderator action, try to delete it
+        postServiceLogger.log('[PostDataService] 🗑️ DECISION: Last post was blocked/moderated, should delete it first then create new post')
+        decisionReport.decision = 'create_with_delete'
+        decisionReport.reason = 'post_blocked'
+        decisionReport.lastPostStatus = lastPost.isBlocked ? 'blocked' : 'moderated'
+        this.saveDecisionReport(decisionReport)
+        return { shouldCreate: true, reason: 'post_blocked', lastPost: lastPost, decisionReport }
+      }
     }
 
     // Priority 2: Check if post is in UNMODERATED state - wait for moderation (only if not removed/blocked)
@@ -313,6 +357,55 @@ export class PostDataService {
       postServiceLogger.log('[PostDataService] 💾 Execution result saved to storage:', executionResult.status, '-', executionResult.postResult)
     } catch (error) {
       postServiceLogger.error('[PostDataService] Failed to save execution result:', error)
+    }
+  }
+
+  // Update post status (and optionally Reddit metadata) using Frappe REST API
+  // extraFields is an optional object, e.g. { reddit_post_url, reddit_post_id, posted_at }
+  static async updatePostStatus(postName, status = 'Posted', extraFields = null) {
+    try {
+      postServiceLogger.log(
+        `[PostDataService] Updating post ${postName} status to: ${status}`,
+        extraFields ? { extraFields } : {}
+      )
+
+      // Get API configuration from storage
+      const storageResult = await chrome.storage.sync.get(['apiConfig'])
+      const apiConfig = storageResult.apiConfig || {
+        token: '8fbbf0a7c626e18:2c3693fb52ac66f'
+      }
+
+      // Use Frappe REST API to update the document
+      const updateEndpoint = `https://32016-51127.bacloud.info/api/resource/Reddit%20Post/${postName}`
+
+      const updateData = {
+        status: status
+      }
+
+      // Shallow-merge any extra fields so extension can also push reddit_post_url/id
+      if (extraFields && typeof extraFields === 'object') {
+        Object.assign(updateData, extraFields)
+      }
+
+      const response = await fetch(updateEndpoint, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `token ${apiConfig.token}`
+        },
+        body: JSON.stringify(updateData)
+      })
+
+      if (!response.ok) {
+        throw new Error(`Failed to update post status: ${response.status} ${response.statusText}`)
+      }
+
+      const result = await response.json()
+      postServiceLogger.log(`[PostDataService] ✅ Post status/metadata updated successfully:`, result)
+      return result
+    } catch (error) {
+      postServiceLogger.error('[PostDataService] Failed to update post status/metadata:', error)
+      throw error
     }
   }
 

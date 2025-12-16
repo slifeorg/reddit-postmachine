@@ -373,6 +373,13 @@ function extractPostDataFromShredditPosts(shredditPosts) {
 
       // Enhanced post data object with all metadata
       const postData = {
+        // Core identifiers (autoflow compatible)
+        elementId: post.id || postAttributes.postId || '',  // Store ID instead of DOM element
+        element: {  // Keep empty object for backwards compatibility
+          id: post.id || postAttributes.postId || '',
+          tagName: post.tagName || 'shreddit-post'
+        },
+        
         // Core identifiers
         id: post.id || postAttributes.postId || '',
         title: title,
@@ -400,17 +407,26 @@ function extractPostDataFromShredditPosts(shredditPosts) {
         viewContext: postAttributes.viewContext || '',
         voteType: postAttributes.voteType || '',
 
-        // Enhanced moderation detection
+        // Enhanced moderation detection (autoflow compatible)
         moderationStatus: {
           isRemoved: post.textContent?.includes('removed by the moderators') ||
-                    post.querySelector('[icon-name="remove"]') !== null || false,
-          isLocked: post.querySelector('[icon-name="lock-fill"]') !== null,
-          itemState: postAttributes.itemState || ''
+                    post.querySelector('[icon-name="remove"]') !== null ||
+                    postAttributes.itemState === 'moderator_removed' || false,
+          isLocked: post.querySelector('[icon-name="lock-fill"]') !== null ||
+                   postAttributes.itemState === 'locked' || false,
+          isDeleted: post.textContent?.includes('deleted by the user') ||
+                    post.querySelector('[icon-name="delete"]') !== null ||
+                    postAttributes.itemState === 'deleted' || false,
+          isSpam: postAttributes.itemState === 'spam' || false,
+          itemState: postAttributes.itemState || '',
+          viewContext: postAttributes.viewContext || '',
+          voteType: postAttributes.voteType || ''
         },
 
         // Additional metadata
         userId: postAttributes.userId || '',
-        permalink: postAttributes.permalink || ''
+        permalink: postAttributes.permalink || '',
+        createdTimestamp: postAttributes.createdTimestamp || timestamp
       }
 
       statsLogger.log(`📊 Enhanced post data extracted:`, {
@@ -421,7 +437,9 @@ function extractPostDataFromShredditPosts(shredditPosts) {
         score: postData.score,
         commentCount: postData.commentCount,
         postType: postData.postType,
-        itemState: postData.itemState
+        itemState: postData.itemState,
+        moderationStatus: postData.moderationStatus,
+        element: postData.element ? 'DOM element present' : 'No element'
       })
 
       posts.push(postData)
@@ -477,72 +495,6 @@ function checkPostStatus(postElement, statusType) {
   return statusTexts.some(statusText => postText.includes(statusText))
 }
 
-// Handle check user status request
-async function handleCheckUserStatus(userName) {
-  statsLogger.log('Check user status request for:', userName)
-
-  try {
-    // Navigate to user profile and posts
-    await navigateToUserProfile(userName)
-    await navigateToPostsTab()
-
-    // Extract enhanced post data using the new function
-    const shredditApp = document.querySelector('shreddit-app')
-    if (!shredditApp) {
-      throw new Error('Reddit app container not found')
-    }
-
-    // Find all shreddit-post elements with IDs
-    const shredditPosts = Array.from(shredditApp.querySelectorAll('shreddit-post[id^="t3_"]'))
-    statsLogger.log(`🎯 Found ${shredditPosts.length} shreddit-post elements with IDs`)
-
-    if (shredditPosts.length === 0) {
-      return {
-        postsInfo: {
-          posts: [],
-          total: 0,
-          lastPost: null
-        },
-        lastPost: null,
-        totalPosts: 0,
-        userName: userName
-      }
-    }
-
-    // Extract enhanced post data
-    const postsData = extractPostDataFromShredditPosts(shredditPosts)
-
-    // Create status report with expected structure for background.js
-    const status = {
-      postsInfo: {
-        posts: postsData,
-        total: postsData.length,
-        lastPost: postsData.length > 0 ? postsData[0] : null
-      },
-      lastPost: postsData.length > 0 ? postsData[0] : null,
-      totalPosts: postsData.length,
-      userName: userName,
-      timestamp: new Date().toISOString()
-    }
-
-    statsLogger.log('Enhanced user status check result:', status)
-    return status
-
-  } catch (error) {
-    statsLogger.error('Error checking user status:', error)
-    return {
-      postsInfo: {
-        posts: [],
-        total: 0,
-        lastPost: null
-      },
-      lastPost: null,
-      totalPosts: 0,
-      userName: userName,
-      error: error.message
-    }
-  }
-}
 
 // Navigate to user profile (helper function)
 async function navigateToUserProfile(userName) {
@@ -1012,13 +964,6 @@ function handleExtractUsernameAndCreatePost() {
   }
 }
 
-// Handle delete last post request
-function handleDeleteLastPost(userName) {
-  statsLogger.log('Delete last post request for:', userName)
-  // This would be implemented if needed for stats functionality
-  statsLogger.log('Delete last post not implemented in stats script')
-}
-
 // Helper function to find and click View Profile when username not found
 async function handleUserNotFoundNavigation() {
   statsLogger.log('Username not found, attempting automatic navigation to user profile...')
@@ -1250,22 +1195,23 @@ async function handleCheckUserStatus(userName) {
         statusMessage: 'Attempting automatic navigation to user profile...'
       }
 
-      chrome.storage.local.set({
-        userStatus: navigationStatus
-      }).catch(() => {})
+      // Don't save incomplete status - let the complete data overwrite it
+      // chrome.storage.local.set({
+      //   userStatus: navigationStatus
+      // }).catch(() => {})
 
       const navigationSuccess = await handleUserNotFoundNavigation()
       if (navigationSuccess) {
         statsLogger.log('Automatic navigation to profile successful')
-        // Update status to show profile navigation success
-        const profileStatus = {
-          ...navigationStatus,
-          statusMessage: 'Successfully navigated to user profile, proceeding to posts...'
-        }
+        // Don't save intermediate status - let complete data overwrite it
+        // const profileStatus = {
+        //   ...navigationStatus,
+        //   statusMessage: 'Successfully navigated to user profile, proceeding to posts...'
+        // }
 
-        chrome.storage.local.set({
-          userStatus: profileStatus
-        }).catch(() => {})
+        // chrome.storage.local.set({
+        //   userStatus: profileStatus
+        // }).catch(() => {})
 
         // After profile navigation, try to navigate to posts
         const postsNavigationSuccess = await navigateToPostsFromProfile()
@@ -1302,20 +1248,24 @@ async function handleCheckUserStatus(userName) {
     }
 
     // Get cached profile data to see if we need fresh collection
-    const profileData = await chrome.storage.local.get(['redditProfileData'])
+    const profileData = await chrome.storage.local.get(['redditProfileData', 'latestPostsData'])
     const cachedData = profileData.redditProfileData
-    const isDataStale = !cachedData || (Date.now() - cachedData.lastUpdated > 3600000) // 1 hour
+    const latestPosts = profileData.latestPostsData
+    const isDataStale = !latestPosts || (Date.now() - latestPosts.lastUpdated > 3600000) // 1 hour
+
+    // Use latestPostsData for posts count, not the old redditProfileData
+    const postsCount = latestPosts?.postsInfo?.total || latestPosts?.postsInfo?.posts?.length || 0
 
     const status = {
       currentUser: currentUser,
       storedUser: storedUser?.seren_name || null,
       isMatch: currentUser === storedUser?.seren_name,
       lastCheck: storedUser?.lastCheck || null,
-      postsCount: cachedData?.posts?.length || 0,
+      postsCount: postsCount,
       currentUrl: window.location.href,
       timestamp: Date.now(),
       collectingPostsData: false,
-      dataFresh: !isDataStale && cachedData?.username === currentUser,
+      dataFresh: !isDataStale && latestPosts?.userName === currentUser,
       statusMessage: isDataStale ? 'Data is stale, collecting fresh posts...' : 'Using cached data'
     }
 
@@ -1334,7 +1284,7 @@ async function handleCheckUserStatus(userName) {
     if (currentUser && isDataStale) {
       statsLogger.log('Collecting fresh posts data for user:', currentUser)
 
-      // Update status to show collection is starting
+      // Update status to show collection is starting, but preserve posts count
       const collectingStatus = {
         ...status,
         collectingPostsData: true,
@@ -1395,7 +1345,7 @@ if (window.location.href.includes('/submit')) {
 
     switch (message.type) {
       case 'DELETE_LAST_POST':
-        handleDeleteLastPost(message.userName)
+        // Delete post is handled by the main content script, ignore here
         break
 
       case 'CHECK_USER_STATUS':

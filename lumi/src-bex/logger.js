@@ -9,7 +9,8 @@ class ExtensionLogger {
     try {
       // Check if debug mode is enabled in storage
       const result = await chrome.storage.local.get(['debugMode']);
-      this.debugEnabled = result.debugMode || false;
+      // For background scripts, always enable logging regardless of storage setting
+      this.debugEnabled = true;
     } catch (error) {
       // If storage is not available, keep current setting
     }
