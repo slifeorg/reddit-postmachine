@@ -96,13 +96,13 @@ export async function getUnifiedTab(targetUrl, operationType = null) {
     // Check if stored tab is still valid
     if (storedTabId && await isTabValid(storedTabId)) {
       bgLogger.log(`[UnifiedTabMgr] Reusing unified tab ${storedTabId} for ${operationType || 'operation'}`)
-      
+
       // Clean up old listeners before reusing the tab
       cleanupTabListeners(storedTabId)
-      
+
       // Navigate to the new URL
       await chrome.tabs.update(storedTabId, { url: targetUrl, active: true })
-      
+
       // Set this as the controlled tab
       setCurrentControlledTabId(storedTabId, operationType)
       return storedTabId
@@ -254,7 +254,7 @@ export function clearCurrentControlledTabId() {
  */
 export async function reloadUnifiedTab(newUrl, operationType = null) {
   const current = getCurrentControlledTab()
-  
+
   if (!current.tabId) {
     // No tab currently controlled, get a new one
     return getUnifiedTab(newUrl, operationType)
@@ -281,51 +281,20 @@ export async function reloadUnifiedTab(newUrl, operationType = null) {
 }
 
 /**
- * Close all Reddit tabs and create a fresh one
- * This is used when starting autoflow to ensure a clean state
+ * Initialize the unified Reddit tab for autoflow without closing existing tabs.
+ *
+ * Behavior:
+ * - If a Reddit tab is currently active, reuse it
+ * - Otherwise, reuse the first existing Reddit tab
+ * - Only create a new Reddit tab if no Reddit tab exists at all
+ * - Always navigate the chosen tab to the target URL and mark it as the unified tab
+ *
  * @param {string} userName - Optional username to navigate directly to submitted page
- */
+  */
 export async function closeAllRedditTabsAndOpenFresh(userName) {
   try {
-    bgLogger.log('[UnifiedTabMgr] Closing all Reddit tabs for fresh start')
-    
-    // Query all Reddit tabs
-    const redditTabs = await chrome.tabs.query({ url: "*://*.reddit.com/*" })
-    
-    // Close all Reddit tabs except the extension tab if it's open on reddit.com
-    const extensionUrl = `chrome-extension://${chrome.runtime.id}/`
-    const tabsToClose = redditTabs.filter(tab => !tab.url.startsWith(extensionUrl))
-    
-    if (tabsToClose.length > 0) {
-      bgLogger.log(`[UnifiedTabMgr] Removing beforeunload listeners from ${tabsToClose.length} Reddit tabs before closing`)
-      
-      // Send message to all tabs to remove beforeunload listeners before closing
-      const removePromises = tabsToClose.map(tab => 
-        chrome.tabs.sendMessage(tab.id, {
-          type: 'REMOVE_BEFOREUNLOAD_LISTENERS'
-        }).catch(() => {
-          // Ignore errors from tabs that don't have the content script
-          bgLogger.log(`[UnifiedTabMgr] Could not send remove beforeunload message to tab ${tab.id}`)
-        })
-      )
-      
-      // Wait for messages to be sent (with a short timeout)
-      await Promise.race([
-        Promise.all(removePromises),
-        new Promise(resolve => setTimeout(resolve, 500))
-      ])
-      
-      bgLogger.log(`[UnifiedTabMgr] Closing ${tabsToClose.length} Reddit tabs`)
-      await chrome.tabs.remove(tabsToClose.map(tab => tab.id))
-    }
-    
-    // Clear the unified tab ID since we closed all tabs
-    await clearUnifiedTabId()
-    clearCurrentControlledTabId()
-    
-    // Clean up any listeners for closed tabs
-    tabsToClose.forEach(tab => cleanupTabListeners(tab.id))
-    
+    bgLogger.log('[UnifiedTabMgr] Initializing unified Reddit tab for autoflow (reuse active, close others)')
+
     // Determine the URL to navigate to
     let targetUrl = 'https://www.reddit.com/'
     if (userName) {
@@ -333,20 +302,86 @@ export async function closeAllRedditTabsAndOpenFresh(userName) {
       targetUrl = `https://www.reddit.com/user/${cleanUsername}/submitted/`
       bgLogger.log(`[UnifiedTabMgr] 🚀 Using direct navigation to user's submitted page: ${targetUrl}`)
     }
-    
-    // Open a fresh Reddit tab
-    const freshTab = await chrome.tabs.create({
-      url: targetUrl,
-      active: true
-    })
-    
-    await saveUnifiedTabId(freshTab.id)
-    setCurrentControlledTabId(freshTab.id, OPERATIONS.REDDIT)
-    
-    bgLogger.log(`[UnifiedTabMgr] Created fresh Reddit tab ${freshTab.id}`)
-    return freshTab.id
+
+    // Find existing Reddit tabs
+    const redditTabs = await chrome.tabs.query({ url: '*://*.reddit.com/*' })
+
+    // Try to find the currently active Reddit tab in the current window
+    const activeTabs = await chrome.tabs.query({ active: true, currentWindow: true })
+    let preferredTab = null
+    if (activeTabs.length > 0) {
+      const activeTab = activeTabs[0]
+      if (activeTab.url && activeTab.url.includes('reddit.com')) {
+        preferredTab = activeTab
+      }
+    }
+
+    // If no active Reddit tab in current window, fall back to any existing Reddit tab
+    if (!preferredTab && redditTabs.length > 0) {
+      preferredTab = redditTabs[0]
+    }
+
+    // Close all other Reddit tabs except the preferred one (if any)
+    const tabsToClose = redditTabs.filter(tab => !preferredTab || tab.id !== preferredTab.id)
+    if (tabsToClose.length > 0) {
+      bgLogger.log(`[UnifiedTabMgr] Closing ${tabsToClose.length} other Reddit tabs, keeping tab ${preferredTab ? preferredTab.id : 'none yet'}`)
+
+      // Best-effort: ask those tabs to remove beforeunload listeners before closing
+      const removePromises = tabsToClose.map(tab =>
+        chrome.tabs.sendMessage(tab.id, { type: 'REMOVE_BEFOREUNLOAD_LISTENERS' }).catch(() => {
+          bgLogger.log(`[UnifiedTabMgr] Could not send remove beforeunload message to tab ${tab.id}`)
+        })
+      )
+
+      await Promise.race([
+        Promise.all(removePromises),
+        new Promise(resolve => setTimeout(resolve, 500))
+      ])
+
+      // Actually close the extra tabs
+      await chrome.tabs.remove(tabsToClose.map(tab => tab.id))
+
+      // Clean up listeners for closed tabs
+      tabsToClose.forEach(tab => cleanupTabListeners(tab.id))
+    }
+
+    let targetTab
+    if (preferredTab) {
+      bgLogger.log(`[UnifiedTabMgr] Reusing existing Reddit tab ${preferredTab.id} for autoflow`)
+
+      // Clean up any old listeners for this tab before we start controlling it
+      cleanupTabListeners(preferredTab.id)
+
+      try {
+        // Best-effort: remove beforeunload listeners from the tab we're about to control
+        await chrome.tabs.sendMessage(preferredTab.id, {
+          type: 'REMOVE_BEFOREUNLOAD_LISTENERS'
+        }).catch(() => {
+          // Ignore errors from tabs that don't have the content script
+          bgLogger.log(`[UnifiedTabMgr] Could not send remove beforeunload message to tab ${preferredTab.id}`)
+        })
+      } catch (e) {
+        // Ignore errors here; they shouldn't block autoflow
+      }
+
+      targetTab = await chrome.tabs.update(preferredTab.id, { url: targetUrl, active: true })
+    } else {
+      bgLogger.log('[UnifiedTabMgr] No existing Reddit tab found; creating new one for autoflow')
+
+      targetTab = await chrome.tabs.create({
+        url: targetUrl,
+        active: true
+      })
+    }
+
+    // Track this tab as the unified Reddit tab
+    await saveUnifiedTabId(targetTab.id)
+    setCurrentControlledTabId(targetTab.id, OPERATIONS.REDDIT)
+
+    bgLogger.log(`[UnifiedTabMgr] Unified Reddit tab for autoflow is ${targetTab.id}`)
+    return targetTab.id
   } catch (error) {
-    bgLogger.error('[UnifiedTabMgr] Failed to close Reddit tabs and create fresh one:', error)
+    bgLogger.error('[UnifiedTabMgr] Failed to initialize unified Reddit tab for autoflow:', error)
     throw error
   }
 }

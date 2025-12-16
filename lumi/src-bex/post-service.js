@@ -360,6 +360,79 @@ export class PostDataService {
     }
   }
 
+  /**
+   * Update post status by Reddit URL (for deletion)
+   */
+  static async updatePostStatusByRedditUrl(redditUrl, status = 'Deleted', reason = null) {
+    try {
+      postServiceLogger.log(
+        `[PostDataService] Updating post status for Reddit URL: ${redditUrl} to: ${status}`
+      )
+
+      // Get API configuration from storage
+      const storageResult = await chrome.storage.sync.get(['apiConfig'])
+      const apiConfig = storageResult.apiConfig || {
+        token: '8fbbf0a7c626e18:2c3693fb52ac66f'
+      }
+
+      // Use Frappe API to find post by Reddit URL
+      const filterEndpoint = `https://32016-51127.bacloud.info/api/resource/Reddit%20Post?filters=[["reddit_post_url","=","${encodeURIComponent(redditUrl)}"]]`
+
+      const response = await fetch(filterEndpoint, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `token ${apiConfig.token}`
+        }
+      })
+
+      if (!response.ok) {
+        throw new Error(`Failed to find post by URL: ${response.status}`)
+      }
+
+      const data = await response.json()
+      
+      if (!data.data || data.data.length === 0) {
+        postServiceLogger.warn(`[PostDataService] No post found with Reddit URL: ${redditUrl}`)
+        return null
+      }
+
+      const postName = data.data[0].name
+      postServiceLogger.log(`[PostDataService] Found post: ${postName}, updating status`)
+
+      // Update the post status
+      const updateData = {
+        status: status
+      }
+
+      if (reason) {
+        updateData.deletion_reason = reason
+      }
+
+      const updateEndpoint = `https://32016-51127.bacloud.info/api/resource/Reddit%20Post/${postName}`
+
+      const updateResponse = await fetch(updateEndpoint, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `token ${apiConfig.token}`
+        },
+        body: JSON.stringify(updateData)
+      })
+
+      if (!updateResponse.ok) {
+        throw new Error(`Failed to update post status: ${updateResponse.status}`)
+      }
+
+      const result = await updateResponse.json()
+      postServiceLogger.log(`[PostDataService] ✅ Post status updated successfully:`, result)
+      return result
+    } catch (error) {
+      postServiceLogger.error('[PostDataService] Failed to update post status by URL:', error)
+      throw error
+    }
+  }
+
   // Update post status (and optionally Reddit metadata) using Frappe REST API
   // extraFields is an optional object, e.g. { reddit_post_url, reddit_post_id, posted_at }
   static async updatePostStatus(postName, status = 'Posted', extraFields = null) {

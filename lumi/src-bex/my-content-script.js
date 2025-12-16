@@ -218,8 +218,12 @@ function initializeRedditIntegration() {
         break
 
       case 'DELETE_LAST_POST':
-        handleDeleteLastPost(message.userName)
-        break
+	        // Start delete flow and immediately acknowledge receipt to avoid
+	        // "asynchronous response" errors in the sender. The actual
+	        // completion result is reported separately via ACTION_COMPLETED.
+	        handleDeleteLastPost(message.userName)
+	        sendResponse({ started: true })
+	        break
 
       case 'BG_LOG':
         // Visual logging for debugging from background script
@@ -1408,32 +1412,32 @@ async function capturePostsData(username) {
               id: element.getAttribute('id') || '',
               tagName: element.tagName || 'DIV'
             },
-            
+
             // Core identifiers
             id: element.getAttribute('id') || '',
             title: titleElement.textContent?.trim() || '',
             url: linkElement?.href || '',
             timestamp: Date.now(),
-            
+
             // Author and subreddit
             author: username,
             subreddit: element.getAttribute('subreddit-prefixed-name') || '',
-            
+
             // Engagement metrics
             score: parseInt(scoreElement?.textContent?.trim()) || 0,
             commentCount: parseInt(commentsElement?.textContent?.trim()) || 0,
             comments: commentsElement?.textContent?.trim() || '0', // Keep for backwards compatibility
-            
+
             // Post content
             postType: element.getAttribute('post-type') || '',
             domain: element.getAttribute('domain') || '',
             contentHref: element.getAttribute('content-href') || '',
-            
+
             // Status and moderation
             itemState: element.getAttribute('item-state') || '',
             viewContext: element.getAttribute('view-context') || '',
             voteType: element.getAttribute('vote-type') || '',
-            
+
             // Enhanced moderation status (autoflow compatible)
             moderationStatus: {
               isRemoved: element.textContent?.includes('removed by the moderators') ||
@@ -1449,12 +1453,12 @@ async function capturePostsData(username) {
               viewContext: element.getAttribute('view-context') || '',
               voteType: element.getAttribute('vote-type') || ''
             },
-            
+
             // Additional metadata
             userId: element.getAttribute('user-id') || '',
             permalink: element.getAttribute('permalink') || '',
             createdTimestamp: element.getAttribute('created-timestamp') || Date.now(),
-            
+
             // Legacy fields for backwards compatibility
             username: username
           }
@@ -2025,34 +2029,34 @@ async function checkUserPosts() {
           id: post.getAttribute('id') || '',
           tagName: post.tagName || 'shreddit-post'
         },
-        
+
         // Core identifiers
         id: post.getAttribute('id') || '',
         title: post.getAttribute('post-title') || post.querySelector('h3, [data-testid="post-title"]')?.textContent?.trim() || '',
         url: post.getAttribute('permalink') || post.querySelector('a[href*="/comments/"]')?.href || '',
         timestamp: timestamp,
-        
+
         // Author and subreddit
         author: post.getAttribute('author') || '',
         subreddit: post.getAttribute('subreddit-prefixed-name') || '',
         authorId: post.getAttribute('author-id') || '',
         subredditId: post.getAttribute('subreddit-id') || '',
-        
+
         // Engagement metrics
         score: parseInt(post.getAttribute('score')) || 0,
         commentCount: parseInt(post.getAttribute('comment-count')) || 0,
         awardCount: parseInt(post.getAttribute('award-count')) || 0,
-        
+
         // Post content
         postType: post.getAttribute('post-type') || '',
         domain: post.getAttribute('domain') || '',
         contentHref: post.getAttribute('content-href') || '',
-        
+
         // Status and moderation
         itemState: post.getAttribute('item-state') || '',
         viewContext: post.getAttribute('view-context') || '',
         voteType: post.getAttribute('vote-type') || '',
-        
+
         // Enhanced moderation status (autoflow compatible)
         moderationStatus: {
           isRemoved: post.textContent?.includes('removed by the moderators') ||
@@ -2068,12 +2072,12 @@ async function checkUserPosts() {
           viewContext: post.getAttribute('view-context') || '',
           voteType: post.getAttribute('vote-type') || ''
         },
-        
+
         // Additional metadata
         userId: post.getAttribute('user-id') || '',
         permalink: post.getAttribute('permalink') || '',
         createdTimestamp: post.getAttribute('created-timestamp') || timestamp,
-        
+
         // Keep original DOM element for deletion operations (but won't be serialized)
         _domElement: post
       }
@@ -2093,7 +2097,7 @@ async function checkUserPosts() {
 
     if (postsWithDates.length > 0) {
       contentLogger.log(`Last post date: ${postsWithDates[0].timestamp}`)
-      
+
       // Return posts with enhanced structure
       return {
         total: postsWithDates.length,
@@ -2235,7 +2239,9 @@ async function handleDeleteLastPost(userName) {
         type: 'ACTION_COMPLETED',
         action: 'DELETE_POST_COMPLETED',
         success: true,
-        postId: mostRecentPost.id || null
+        postId: mostRecentPost.id || null,
+        redditUrl: mostRecentPost.url || null,
+        title: mostRecentPost.title || null
       }).catch(() => {})
     } else {
       const messageDiv = createMessageDiv('❌', 'Delete Failed', 'Could not delete the post. Please try manually.', '#ff5722')
@@ -2719,11 +2725,11 @@ async function handleGetFreshPostsForDecision(userName) {
       postsInfo: serializablePostsInfo,
       lastUpdated: Date.now()
     }
-    
+
     contentLogger.log('[Content Script] About to save storageData:', storageData)
     contentLogger.log('[Content Script] postsInfo structure:', postsInfo)
     contentLogger.log('[Content Script] postsInfo.posts length:', postsInfo?.posts?.length)
-    
+
     chrome.storage.local.set({ 'latestPostsData': storageData }, () => {
       contentLogger.log('Fresh posts data saved to local storage during decision-making', storageData)
     })

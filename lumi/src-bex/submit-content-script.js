@@ -915,23 +915,70 @@ async function runPostSubmissionScript(skipTabStateCheck = false) {
       let redditPostId = null
 
       try {
-        // Lightweight copy of the ID extraction patterns from dom.js
-        const patterns = [
-          /^t3_([a-z0-9]+)$/i,
-          /\/comments\/([a-z0-9]+)/i,
-          /\/r\/[^\/]+\/comments\/([a-z0-9]+)/i,
-          /id=([a-z0-9]+)/i
+        // Extract Reddit post ID from the submitted post URL
+        // Reddit's URL formats can vary:
+        // - https://reddit.com/r/subreddit/comments/abc123/title/
+        // - https://www.reddit.com/r/subreddit/comments/abc123/title/
+        // - https://old.reddit.com/r/subreddit/comments/abc123/title/
+        // - The page might also have a data attribute with the post ID
+        
+        submitLogger.log('Extracting Reddit post ID from URL:', redditUrl)
+        
+        // Method 1: Extract from URL patterns
+        const urlPatterns = [
+          /\/comments\/([a-z0-9]{6,7})/i,  // Standard Reddit post ID format (6-7 chars)
+          /\/r\/[^\/]+\/comments\/([a-z0-9]{6,7})/i,
+          /reddit\.com\/.*\/([a-z0-9]{6,7})\//i,
+          /^t3_([a-z0-9]{6,7})$/i
         ]
-
-        for (const pattern of patterns) {
+        
+        for (const pattern of urlPatterns) {
           const match = redditUrl && redditUrl.match(pattern)
           if (match && match[1]) {
             redditPostId = match[1]
+            submitLogger.log(`Extracted post ID using URL pattern: ${redditPostId}`)
             break
           }
         }
+        
+        // Method 2: Try to get from page data if URL extraction failed
+        if (!redditPostId) {
+          // Check for post ID in page data or meta tags
+          const pageData = window.__r || {}
+          const postIdFromData = pageData?.post?.id || 
+                               document.querySelector('[data-post-id]')?.getAttribute('data-post-id') ||
+                               document.querySelector('shreddit-post')?.getAttribute('id')
+          
+          if (postIdFromData) {
+            // Extract just the ID part if it's in t3_ format
+            const idMatch = postIdFromData.match(/t3_([a-z0-9]{6,7})/i) || 
+                           postIdFromData.match(/([a-z0-9]{6,7})/i)
+            if (idMatch && idMatch[1]) {
+              redditPostId = idMatch[1]
+              submitLogger.log(`Extracted post ID from page data: ${redditPostId}`)
+            }
+          }
+        }
+        
+        // Method 3: Try to get from current page's post element
+        if (!redditPostId && window.location.pathname.includes('/comments/')) {
+          const postElement = document.querySelector('shreddit-post')
+          if (postElement && postElement.id) {
+            const idMatch = postElement.id.match(/t3_([a-z0-9]{6,7})/i)
+            if (idMatch && idMatch[1]) {
+              redditPostId = idMatch[1]
+              submitLogger.log(`Extracted post ID from post element: ${redditPostId}`)
+            }
+          }
+        }
+        
+        if (!redditPostId) {
+          submitLogger.warn('Could not extract Reddit post ID. URL:', redditUrl)
+        } else {
+          submitLogger.log(`Successfully extracted Reddit post ID: ${redditPostId}`)
+        }
       } catch (e) {
-        submitLogger.warn('Failed to extract Reddit post ID from URL:', redditUrl, e)
+        submitLogger.warn('Failed to extract Reddit post ID:', e)
       }
 
       submitLogger.log('Captured Reddit post URL/ID after submission:', { redditUrl, redditPostId })

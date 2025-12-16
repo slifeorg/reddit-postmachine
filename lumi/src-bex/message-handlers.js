@@ -830,16 +830,6 @@ async function handlePostCreationCompleted(tabId, state, success, data) {
 
   await PostDataService.saveExecutionResult(executionResult)
 
-  try {
-    const tab = await chrome.tabs.get(tabId)
-    if (tab) {
-      await chrome.tabs.remove(tabId)
-      bgLogger.log(`[BG] Closed submit tab ${tabId}`)
-    }
-  } catch (error) {
-    bgLogger.warn(`[BG] Submit tab ${tabId} already closed or not found:`, error)
-  }
-
   if (success && !userName) {
     try {
       const syncResult = await chrome.storage.sync.get(['redditUser'])
@@ -850,16 +840,17 @@ async function handlePostCreationCompleted(tabId, state, success, data) {
   }
 
   if (success && userName) {
+    // Reuse the unified tab for submitted page instead of opening an extra tab
     setTimeout(async () => {
       try {
         const cleanUsername = userName.replace('u/', '')
-        const newTab = await chrome.tabs.create({
-          url: `https://www.reddit.com/user/${cleanUsername}/submitted/`,
-          active: true
-        })
-        finalizeAutoFlowToSubmitted(newTab.id, userName)
+        const submittedUrl = `https://www.reddit.com/user/${cleanUsername}/submitted/`
+
+        bgLogger.log('[BG] Navigating unified tab to submitted posts after post creation:', submittedUrl)
+        const unifiedTabId = await reloadUnifiedTab(submittedUrl, OPERATIONS.POST_COLLECTION)
+        finalizeAutoFlowToSubmitted(unifiedTabId, userName)
       } catch (error) {
-        bgLogger.error('[BG] Failed to open submitted posts page after post creation:', error)
+        bgLogger.error('[BG] Failed to navigate unified tab to submitted posts page after post creation:', error)
       }
     }, 1000)
   }
@@ -876,6 +867,14 @@ async function handleDeletePostCompleted(tabId, state, success, data) {
   const userName = state?.userName || data?.userName
   bgLogger.log('[BG] Tab state:', state)
   bgLogger.log('[BG] Username extracted:', userName)
+
+  // Clear the tab state so a fresh auto-flow can start without thinking this tab
+  // is still busy in COLLECTING_POSTS/DELETING_POST. We keep using the local
+  // `state` snapshot below, but remove the shared reference from `tabStates`.
+  if (tabStates[tabId]) {
+    bgLogger.log(`[BG] Clearing tab state for tab ${tabId} after delete completion`)
+    delete tabStates[tabId]
+  }
 
   await AutoFlowStateManager.saveState('deletion_completed', {
     userName,
@@ -897,6 +896,22 @@ async function handleDeletePostCompleted(tabId, state, success, data) {
     await PostDataService.saveExecutionResult(executionResult)
   } else {
     bgLogger.log('[BG] Skipping execution result save for auto-flow deletion - will save after post creation')
+  }
+
+  // Update backend status when post is deleted
+  if (success && data?.redditUrl) {
+    try {
+      bgLogger.log('[BG] 🔄 Updating backend status for deleted post:', data.redditUrl)
+      await PostDataService.updatePostStatusByRedditUrl(
+        data.redditUrl,
+        'Deleted',
+        'Deleted by user via extension'
+      )
+      bgLogger.log('[BG] ✅ Backend status updated for deleted post')
+    } catch (error) {
+      bgLogger.error('[BG] Failed to update backend status for deleted post:', error)
+      // Don't fail the deletion process if backend update fails
+    }
   }
 
   if (success) {
@@ -1153,32 +1168,15 @@ export async function resumeAutoFlow(state, sendResponse) {
         break
 
       case 'deleting_post':
-        bgLogger.log('[BG] 🔄 Resuming delete operation')
-        if (state.tabId && state.lastPostToDelete) {
-          const tabValid = await AutoFlowStateManager.validateTab(state.tabId)
-          if (tabValid) {
-            chrome.tabs.sendMessage(state.tabId, {
-              type: 'DELETE_LAST_POST',
-              userName: state.userName
-            }).then((response) => {
-              bgLogger.log('[BG] Delete command sent successfully on resume:', response)
-              setTimeout(() => {
-                proceedWithPostCreation(state.userName, state.tabId)
-              }, 3000)
-            }).catch((err) => {
-              bgLogger.error('[BG] ❌ Failed to resume delete command:', err)
-              proceedWithPostCreation(state.userName, state.tabId)
-            })
-          } else {
-            bgLogger.log('[BG] Tab is no longer valid, starting fresh')
-            await AutoFlowStateManager.clearState(state.userName)
-            await handleCheckUserStatus(state.userName, sendResponse)
-          }
-        } else {
-          bgLogger.log('[BG] Cannot resume deletion - missing tab or post info, starting fresh')
-          await AutoFlowStateManager.clearState(state.userName)
-          await handleCheckUserStatus(state.userName, sendResponse)
-        }
+        // For delete-and-create flows we always want to behave like the
+        // non-resume path: complete the deletion, then restart the full
+        // auto-flow analysis from the beginning (create_with_delete).
+        // Trying to "resume" by jumping directly into post creation can
+        // lead to posting without fresh analysis and is against the
+        // intended semantics, so we just clear state and restart.
+        bgLogger.log('[BG] 🔄 Resuming from deleting_post: clearing state and restarting full auto-flow')
+        await AutoFlowStateManager.clearState(state.userName)
+        await handleCheckUserStatus(state.userName, sendResponse)
         break
 
       case 'creating_post':
@@ -1246,15 +1244,15 @@ export async function handleCheckUserStatus(userName, sendResponse) {
       bgLogger.log('[BG] Could not retrieve redditUser from storage, using provided userName')
     }
 
-    // Close all Reddit tabs and open a fresh one for clean autoflow start
-    bgLogger.log('[BG] 🧹 Closing all Reddit tabs and opening fresh tab for autoflow')
+    // Initialize or adopt a unified Reddit tab for autoflow, preserving existing tabs when possible
+    bgLogger.log('[BG] 🚦 Initializing unified Reddit tab for autoflow (reusing current Reddit tab when available)')
     const freshTabId = await closeAllRedditTabsAndOpenFresh(optimizedUserName)
 
-    // Wait for the fresh tab to load before starting automation
+    // Wait for the chosen tab to load before starting automation
     const tabLoadListener = (tabId, changeInfo, tab) => {
       if (tabId === freshTabId && changeInfo.status === 'complete') {
         chrome.tabs.onUpdated.removeListener(tabLoadListener)
-        bgLogger.log(`[BG] Fresh tab ${freshTabId} loaded, starting automation`)
+        bgLogger.log(`[BG] Unified Reddit tab ${freshTabId} loaded, starting automation`)
         startAutomationForTab(freshTabId, userName)
       }
     }
@@ -1263,8 +1261,8 @@ export async function handleCheckUserStatus(userName, sendResponse) {
     sendResponse({
       success: true,
       message: optimizedUserName !== userName
-        ? `Closed all Reddit tabs and created fresh tab with direct navigation to ${optimizedUserName}/submitted/`
-        : 'Closed all Reddit tabs and created fresh tab for automation',
+        ? `Initialized unified Reddit tab with direct navigation to ${optimizedUserName}/submitted/`
+        : 'Initialized unified Reddit tab for automation',
       tabId: freshTabId,
       userName: userName
     })

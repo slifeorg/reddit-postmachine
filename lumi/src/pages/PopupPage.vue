@@ -1,15 +1,15 @@
 <template>
-  <q-page class="q-pa-md" style="min-width: 350px; min-height: 400px;">
+	  <q-page class="q-pa-md" style="min-width: 350px; min-height: 400px;">
     <!-- Top action buttons -->
-    <div class="row q-mb-md q-gutter-sm justify-center">
+    <div class="row q-mb-sm q-gutter-sm justify-center">
       <q-btn
         round
-        color="primary"
+        color="grey-8"
         icon="add"
-        size="md"
+        size="sm"
         @click="createPost"
         :disable="!storedUsername"
-        class="shadow-2"
+        class="mono-btn shadow-1"
       >
         <q-tooltip>Create New Post</q-tooltip>
       </q-btn>
@@ -17,28 +17,31 @@
       <q-btn
         v-if="storedUsername"
         round
-        color="info"
+        color="grey-8"
         icon="info"
-        size="md"
+        size="sm"
         @click="checkUserStatus"
-        class="shadow-2"
+        class="mono-btn shadow-1"
       >
         <q-tooltip>Check User Status</q-tooltip>
 
       </q-btn>
 		  <q-btn
         v-if="storedUsername"
-        class="round"
-        color="negative"
+        round
+        color="grey-8"
         icon="delete"
+        size="sm"
+        class="mono-btn shadow-1"
         @click="deleteLastPost"
       />
-		<q-btn
+			<q-btn
         v-if="storedUsername"
-        class="full-width q-mt-sm"
-        color="primary"
+        class="full-width q-mt-sm mono-btn"
+        color="grey-8"
         icon="play_arrow"
         label="Auto Flow"
+        size="sm"
         @click="startAutoFlow"
       />
 
@@ -73,10 +76,11 @@
       <!-- Show detect user button if no username is stored -->
       <q-btn
         v-if="!storedUsername"
-        class="full-width"
-        color="orange"
+        class="full-width mono-btn"
+        color="grey-8"
         icon="person_search"
         label="Detect Reddit User"
+        size="sm"
         @click="detectUser"
       />
       <!-- Display auto-flow decision report if available -->
@@ -144,20 +148,15 @@
         </q-card>
       </div>
 
-
-
-
       <q-separator class="q-my-md" />
 
-
+      <!-- Version footer -->
+      <div class="q-mt-xs q-pt-none text-center text-caption text-grey-6">
+        v0.9.0
+      </div>
 
     </div>
 
-<!--    <div class="q-mt-md text-center">-->
-<!--      <div class="text-caption text-grey-6">-->
-<!--        Extension: <span class="text-positive">Connected</span>-->
-<!--      </div>-->
-<!--    </div>-->
   </q-page>
 </template>
 
@@ -315,11 +314,11 @@ export default defineComponent({
     // Format status for display
     const formatStatus = (status) => {
       const statusMap = {
-        'active': '✅ Active',
-        'removed': '🚫 Removed',
-        'blocked': '⛔ Blocked',
-        'deleted': '🗑️ Deleted',
-        'unknown': '❓ Unknown'
+        active: 'Active',
+        removed: 'Removed',
+        blocked: 'Blocked',
+        deleted: 'Deleted',
+        unknown: 'Unknown'
       }
       return statusMap[status] || status
     }
@@ -327,9 +326,9 @@ export default defineComponent({
     // Format decision for display
     const formatDecision = (decision) => {
       const decisionMap = {
-        'no_create': '✅ No Action Needed',
-        'create': '📝 Create New Post',
-        'create_with_delete': '🗑️ Delete & Create New'
+        no_create: 'No Action Needed',
+        create: 'Create New Post',
+        create_with_delete: 'Delete & Create New'
       }
       return decisionMap[decision] || decision
     }
@@ -349,10 +348,10 @@ export default defineComponent({
     // Format execution status for display
     const formatExecutionStatus = (status) => {
       const statusMap = {
-        'completed': '✅ Completed',
-        'failed': '❌ Failed',
-        'skipped': '⏭️ Skipped',
-        'in_progress': '🔄 In Progress'
+        completed: 'Completed',
+        failed: 'Failed',
+        skipped: 'Skipped',
+        in_progress: 'In Progress'
       }
       return statusMap[status] || status
     }
@@ -360,11 +359,11 @@ export default defineComponent({
     // Format post result for display
     const formatPostResult = (result) => {
       const resultMap = {
-        'created': '📝 Post Created',
-        'deleted': '🗑️ Post Deleted',
-        'deleted_and_created': '🗑️📝 Deleted & Created',
-        'none': '⏸️ No Action Taken',
-        'error': '❌ Error Occurred'
+        created: 'Post Created',
+        deleted: 'Post Deleted',
+        deleted_and_created: 'Deleted & Created',
+        none: 'No Action Taken',
+        error: 'Error Occurred'
       }
       return resultMap[result] || result
     }
@@ -516,7 +515,7 @@ export default defineComponent({
       loadPostsData()
       loadDecisionReport()
       loadExecutionResult()
-      
+
       // Add a delay to ensure we get the latest execution result
       setTimeout(() => {
         loadExecutionResult()
@@ -859,104 +858,114 @@ export default defineComponent({
 
 <style lang="scss" scoped>
 .status-card {
-  background: linear-gradient(135deg, #1976d2 0%, #42a5f5 100%);
-  color: white;
-  border-radius: 12px;
-  box-shadow: 0 4px 12px rgba(25, 118, 210, 0.3);
+	  background: #f5f5f5;
+	  color: #333;
+	  border-radius: 8px;
+	  border: 1px solid #e0e0e0;
+	  box-shadow: none;
 }
 
 .status-title {
   display: flex;
   align-items: center;
   font-weight: 600;
-  color: white;
+	  color: #333;
 }
 
 .status-item {
-  margin-bottom: 4px;
-  color: rgba(255, 255, 255, 0.95);
+	  margin-bottom: 2px;
+	  color: #333;
+	  font-size: 12px;
 }
 
 .status-time {
-  margin-top: 8px;
-  color: rgba(255, 255, 255, 0.8);
-  font-size: 11px;
+	  margin-top: 4px;
+	  color: #777;
+	  font-size: 10px;
 }
 
 .decision-card {
-  background: linear-gradient(135deg, #43a047 0%, #66bb6a 100%);
-  color: white;
-  border-radius: 12px;
-  box-shadow: 0 4px 12px rgba(67, 160, 71, 0.3);
+	  background: #f5f5f5;
+	  color: #333;
+	  border-radius: 8px;
+	  border: 1px solid #e0e0e0;
+	  box-shadow: none;
 }
 
 .decision-title {
   display: flex;
   align-items: center;
   font-weight: 600;
-  color: white;
+	  color: #333;
+	  font-size: 13px;
 }
 
 .decision-item {
-  margin-bottom: 4px;
-  color: rgba(255, 255, 255, 0.95);
+	  margin-bottom: 2px;
+	  color: #333;
+	  font-size: 12px;
 }
 
 .decision-time {
-  margin-top: 8px;
-  color: rgba(255, 255, 255, 0.8);
-  font-size: 11px;
+	  margin-top: 4px;
+	  color: #777;
+	  font-size: 10px;
 }
 
 .execution-card {
-  background: linear-gradient(135deg, #7e57c2 0%, #9575cd 100%);
-  color: white;
-  border-radius: 12px;
-  box-shadow: 0 4px 12px rgba(126, 87, 194, 0.3);
+	  background: #f5f5f5;
+	  color: #333;
+	  border-radius: 8px;
+	  border: 1px solid #e0e0e0;
+	  box-shadow: none;
 }
 
 .execution-title {
   display: flex;
   align-items: center;
   font-weight: 600;
-  color: white;
+	  color: #333;
+	  font-size: 13px;
 }
 
 .execution-item {
-  margin-bottom: 4px;
-  color: rgba(255, 255, 255, 0.95);
+	  margin-bottom: 2px;
+	  color: #333;
+	  font-size: 12px;
 }
 
 .execution-time {
-  margin-top: 8px;
-  color: rgba(255, 255, 255, 0.8);
-  font-size: 11px;
+	  margin-top: 4px;
+	  color: #777;
+	  font-size: 10px;
 }
 
-.text-positive {
-  color: #4caf50 !important;
-  background: rgba(255, 255, 255, 0.9);
-  padding: 2px 8px;
-  border-radius: 12px;
-  font-weight: 500;
-  border: 1px solid #4caf50;
-}
-
-.text-negative {
-  color: #f44336 !important;
-  background: rgba(255, 255, 255, 0.9);
-  padding: 2px 8px;
-  border-radius: 12px;
-  font-weight: 500;
-  border: 1px solid #f44336;
-}
-
+/* Neutral, single-color styling for status text */
+.text-positive,
+.text-negative,
 .text-warning {
-  color: #ff9800 !important;
-  background: rgba(255, 255, 255, 0.9);
-  padding: 2px 8px;
-  border-radius: 12px;
-  font-weight: 500;
-  border: 1px solid #ff9800;
+	  color: inherit !important;
+	  background: transparent;
+	  padding: 0;
+	  border-radius: 0;
+	  font-weight: 500;
+	  border: none;
+}
+
+/* Make the card sections tighter for a more compact layout */
+.decision-card .q-card__section,
+.execution-card .q-card__section {
+	  padding-top: 4px;
+	  padding-bottom: 4px;
+}
+
+/* Monochrome, compact buttons with gradient background */
+.mono-btn {
+	  text-transform: none;
+	  font-size: 11px;
+	  padding: 0 10px;
+	  min-width: 0;
+	  background: linear-gradient(135deg, #B0E2FF, #CAE8FF);
+	  color: #123 !important;
 }
 </style>
