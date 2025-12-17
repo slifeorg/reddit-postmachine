@@ -112,25 +112,25 @@
    "fieldname": "account_username",
    "fieldtype": "Data",
    "label": "Posted As (Username)",
-   "read_only": 1
+   "read_only": 0
   },
   {
    "fieldname": "reddit_post_id",
    "fieldtype": "Data",
    "label": "Reddit Post ID",
-   "read_only": 1
+   "read_only": 0
   },
   {
    "fieldname": "reddit_post_url",
    "fieldtype": "Data",
    "label": "Reddit Post URL",
-   "read_only": 1
+   "read_only": 0
   },
   {
    "fieldname": "posted_at",
    "fieldtype": "Datetime",
    "label": "Posted At",
-   "read_only": 1
+   "read_only": 0
   },
   {
    "fieldname": "removal_reason",

@@ -178,15 +178,25 @@ def generate_post_from_template(template_name, account_name=None, agent_name=Non
         # 4.1 Підготовка інформації про агента/персону
         # Безпечно отримуємо всі значення з перевіркою типів
         # Використовуємо прямий доступ до полів з перевіркою
-        agent_display_name = agent_name
-        if not agent_display_name:
-            if hasattr(account_doc, "assistant_name") and account_doc.assistant_name:
-                agent_display_name = str(account_doc.assistant_name).strip()
-            else:
-                agent_display_name = account_username or "Unknown"
+        # 4.1 Підготовка інформації про агента/персону
         
-        if not agent_display_name or not isinstance(agent_display_name, str):
-            agent_display_name = str(account_username) if account_username else "Unknown"
+        # ЗМІНЕНА ЛОГІКА: Спочатку шукаємо "людське" ім'я в налаштуваннях акаунту
+        agent_display_name = ""
+        
+        # 1. ПЕРШИЙ ПРІОРИТЕТ: Поле "assistant_name" в документі акаунту (Katalina)
+        if hasattr(account_doc, "assistant_name") and account_doc.assistant_name:
+            agent_display_name = str(account_doc.assistant_name).strip()
+            
+        # 2. ДРУГИЙ ПРІОРИТЕТ: Аргумент функції, якщо в базі пусто (BleedingHeart_108)
+        if not agent_display_name and agent_name:
+            agent_display_name = agent_name
+            
+        # 3. ТРЕТІЙ ПРІОРИТЕТ: Username акаунту, якщо все інше пусто
+        if not agent_display_name:
+            agent_display_name = account_username or "Unknown"
+            
+        if not isinstance(agent_display_name, str):
+            agent_display_name = str(agent_display_name)
         
         # Читаємо age
         agent_age = None
@@ -724,44 +734,6 @@ def generate_post_for_agent(agent_name):
     """
     logs = []
     
-    # Встановлюємо CORS заголовки (обережно, щоб не впасти на None)
-    try:
-        resp = getattr(frappe, "local", None)
-        if resp is None:
-            resp = frappe._dict()
-            frappe.local = resp
-        
-        # Безпечно отримуємо або створюємо response_obj
-        if not hasattr(resp, "response") or resp.response is None:
-            response_obj = frappe._dict()
-            try:
-                resp.response = response_obj
-            except Exception:
-                # Якщо не вдалося встановити, просто пропускаємо CORS заголовки
-                response_obj = None
-        
-        if response_obj is not None:
-            # Безпечно отримуємо або створюємо headers
-            headers = getattr(response_obj, "headers", None)
-            if headers is None or not isinstance(headers, dict):
-                headers = {}
-                try:
-                    response_obj.headers = headers
-                except Exception:
-                    # Якщо не вдалося встановити, просто пропускаємо CORS заголовки
-                    headers = None
-            
-            if headers is not None:
-                try:
-                    headers["Access-Control-Allow-Origin"] = "*"
-                    headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
-                    headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Frappe-Site-Name"
-                    headers["Access-Control-Max-Age"] = "3600"
-                except Exception:
-                    pass  # Ігноруємо помилки встановлення заголовків
-    except Exception as e:
-        # Безпечно додаємо до logs
-        safe_log_append(logs, f"Warning: Could not set CORS headers: {str(e)}")
     if not agent_name:
         frappe.throw("Agent name is required.")
     

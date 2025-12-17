@@ -59,7 +59,7 @@
       "fieldtype": "Data",
       "in_list_view": 1,
       "label": "Username",
-      "reqd": 1,
+      "reqd": 0,
       "unique": 1
      },
      {
@@ -82,7 +82,7 @@
       "in_list_view": 1,
       "label": "Subreddit Group",
       "options": "East\nWest",
-      "reqd": 1
+      "reqd": 0
      },
      {
       "fieldname": "column_break_1",
@@ -208,20 +208,17 @@
      {
       "fieldname": "airtable_id",
       "fieldtype": "Data",
-      "label": "Airtable ID",
-      "read_only": 1
+      "label": "Airtable ID"
      },
      {
       "fieldname": "last_activity",
       "fieldtype": "Datetime",
-      "label": "Last Activity",
-      "read_only": 1
+      "label": "Last Activity"
      },
      {
       "fieldname": "last_sync",
       "fieldtype": "Datetime",
-      "label": "Last Sync",
-      "read_only": 1
+      "label": "Last Sync"
      },
      {
       "fieldname": "column_break_system",
@@ -231,15 +228,13 @@
       "fieldname": "active_post",
       "fieldtype": "Link",
       "label": "Active Post",
-      "options": "Reddit Post",
-      "read_only": 1
+      "options": "Reddit Post"
      },
      {
       "default": "0",
       "fieldname": "posts_today_count",
       "fieldtype": "Int",
-      "label": "Posts Today Count",
-      "read_only": 1
+      "label": "Posts Today Count"
      }
     ],
     "grid_page_length": 50,
@@ -263,6 +258,7 @@
       "delete": 1,
       "email": 1,
       "export": 1,
+      "import": 1,
       "print": 1,
       "read": 1,
       "report": 1,

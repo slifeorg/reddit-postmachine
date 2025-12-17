@@ -102,21 +102,18 @@
    "default": "0",
    "fieldname": "usage_count",
    "fieldtype": "Int",
-   "label": "Usage Count",
-   "read_only": 1
+   "label": "Usage Count"
   },
   {
    "default": "0",
    "fieldname": "success_rate",
    "fieldtype": "Percent",
-   "label": "Success Rate (%)",
-   "read_only": 1
+   "label": "Success Rate (%)"
   },
   {
    "fieldname": "last_used",
    "fieldtype": "Datetime",
-   "label": "Last Used",
-   "read_only": 1
+   "label": "Last Used"
   },
   {
    "default": "1",
