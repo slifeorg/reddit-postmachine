@@ -13,9 +13,16 @@
   "main_section",
   "group",
   "sub",
+  "location",
+  "gender_tag",
   "column_break_1",
   "title_prompt",
   "title_example",
+  "title_format",
+  "section_flair",
+  "requires_flair",
+  "available_flairs",
+  "flair_selection_mode",
   "section_advanced",
   "body_exclusion_words",
   "body_example",
@@ -49,6 +56,22 @@
    "unique": 1
   },
   {
+   "default": "",
+   "description": "Location for posts. Use 'dynamic' to extract from subreddit name.",
+   "fieldname": "location",
+   "fieldtype": "Select",
+   "label": "Location",
+   "options": "dynamic"
+  },
+  {
+   "default": "[r4r]",
+   "description": "Gender tag format for title. Options: [r4r], [M4F], [F4M], (F4M), R4R, F4M, etc. Use {gender_tag} placeholder in title_format. Format will be auto-adjusted based on title_format (brackets, case).",
+   "fieldname": "gender_tag",
+   "fieldtype": "Select",
+   "label": "Gender Tag",
+   "options": "[r4r]\n[r4R]\n[R4r]\n[R4R]\n[M4F]\n[F4M]\n[M4M]\n[F4F]\n[M4A]\n[F4A]\n(F4M)\n(F4F)\n(M4F)\nR4R\nF4M\nM4F"
+  },
+  {
    "fieldname": "column_break_1",
    "fieldtype": "Column Break"
   },
@@ -63,6 +86,40 @@
    "fieldname": "title_example",
    "fieldtype": "Small Text",
    "label": "Title Example"
+  },
+  {
+   "default": "{age} [r4r] #{city} - {title_text}",
+   "description": "Title format template. Placeholders: {age}, {city} (no spaces, for hashtag), {city_full} (with spaces), {location} or {location_full} (Capitalized, no hashtag), {title_text}. Examples: '{age} [r4r] #{city} - {title_text}' or '{age} R4R {location} {title_text}'",
+   "fieldname": "title_format",
+   "fieldtype": "Small Text",
+   "label": "Title Format Template"
+  },
+  {
+   "fieldname": "section_flair",
+   "fieldtype": "Section Break",
+   "label": "Flair Requirements"
+  },
+  {
+   "default": "0",
+   "description": "Check if this subreddit requires a flair to be set",
+   "fieldname": "requires_flair",
+   "fieldtype": "Check",
+   "label": "Requires Flair"
+  },
+  {
+   "default": "",
+   "description": "Available flairs (one per line). Example: No flair\nAkron\nAthens\nColumbus",
+   "fieldname": "available_flairs",
+   "fieldtype": "Small Text",
+   "label": "Available Flairs"
+  },
+  {
+   "default": "auto",
+   "description": "How to select flair: auto (from location), manual (from available_flairs list), none (no flair)",
+   "fieldname": "flair_selection_mode",
+   "fieldtype": "Select",
+   "label": "Flair Selection Mode",
+   "options": "auto\nmanual\nnone"
   },
   {
    "fieldname": "section_advanced",

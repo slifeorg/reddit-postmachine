@@ -15,6 +15,7 @@
   "subreddit_group",
   "account",
   "template_used",
+  "flair",
   "column_break_status",
   "status",
   "account_username",
@@ -93,6 +94,13 @@
    "fieldtype": "Link",
    "label": "Template Used",
    "options": "Subreddit Template"
+  },
+  {
+   "default": "",
+   "description": "Flair to use when posting (if required by subreddit)",
+   "fieldname": "flair",
+   "fieldtype": "Data",
+   "label": "Flair"
   },
   {
    "fieldname": "column_break_status",

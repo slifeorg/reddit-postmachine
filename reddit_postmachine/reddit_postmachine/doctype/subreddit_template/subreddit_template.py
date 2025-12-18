@@ -194,9 +194,23 @@ def generate_post_from_template(template_name, account_name=None, agent_name=Non
         safe_log_append(logs, f"Raw agent data from DB - assistant_name: {getattr(account_doc, 'assistant_name', 'NOT FOUND')}, assistant_age: {getattr(account_doc, 'assistant_age', 'NOT FOUND')}, assistant_profession: {getattr(account_doc, 'assistant_profession', 'NOT FOUND')}, assistant_location: {getattr(account_doc, 'assistant_location', 'NOT FOUND')}")
         
         agent_location = None
-        if agent_location_raw and isinstance(agent_location_raw, str) and agent_location_raw.lower() == "dynamic":
+        # Спочатку перевіряємо поле location з шаблону
+        template_location = getattr(template, "location", None) if hasattr(template, "location") else None
+        if template_location and isinstance(template_location, str) and template_location.strip():
+            if template_location.lower() == "dynamic":
+                # Використовуємо template.sub з документа шаблону для визначення локації
+                if hasattr(template, "sub") and template.sub:
+                    agent_location = extract_location_from_subreddit(template.sub)
+                    safe_log_append(logs, f"Location extracted from subreddit '{template.sub}' (template.location='dynamic'): {agent_location}")
+                else:
+                    safe_log_append(logs, f"WARNING: template.sub is empty, cannot extract location dynamically")
+            else:
+                agent_location = str(template_location).strip()
+                safe_log_append(logs, f"Location from template: {agent_location}")
+        # Якщо в шаблоні не встановлено, використовуємо значення з акаунту
+        elif agent_location_raw and isinstance(agent_location_raw, str) and agent_location_raw.lower() == "dynamic":
             agent_location = extract_location_from_subreddit(template.sub)
-            safe_log_append(logs, f"Location extracted from subreddit '{template.sub}': {agent_location}")
+            safe_log_append(logs, f"Location extracted from subreddit '{template.sub}' (account.location='dynamic'): {agent_location}")
         elif agent_location_raw:
             agent_location = str(agent_location_raw)  
         
@@ -308,126 +322,537 @@ CRITICAL REQUIREMENTS:
 5. The post must reflect the persona described above - use their age, location, profession/hobby in the content
 6. Make it personal and authentic - write as if you ARE this person"""
         
-     
-        final_age = str(agent_age) if agent_age is not None else "28"
+        # --- 1. ПІДГОТОВКА ФІНАЛЬНИХ ЗНАЧЕНЬ ---
+        final_age = str(agent_age) if agent_age is not None else "25"
         final_location = str(agent_location) if agent_location else "New Haven"
         final_profession = str(agent_profession) if agent_profession else "photographer"
         final_name = str(agent_display_name) if agent_display_name else (str(account_username) if account_username else "Unknown")
         
-        system_content = f"""You are a Reddit expert creating posts for r/{template.sub} (Group: {template.group}).
+        # Отримуємо стиль, якщо він є в акаунті
+        agent_style = getattr(account_doc, "posting_style", "Casual and authentic")
+        
+        # Підготовлюємо city для title (без пробілів та спеціальних символів для хештегу)
+        city_for_title = re.sub(r'[^a-zA-Z0-9]', '', final_location)
+        if not city_for_title:
+            city_for_title = "City"  # Fallback якщо локація порожня
+        
+        # Отримуємо gender tag з шаблону
+        gender_tag_raw = None
+        
+        # Спосіб 1: через template.get() (найнадійніший)
+        try:
+            gender_tag_raw = template.get("gender_tag")
+        except Exception:
+            pass
+        
+        # Спосіб 2: через getattr
+        if not gender_tag_raw and hasattr(template, "gender_tag"):
+            gender_tag_raw = getattr(template, "gender_tag", None)
+        
+        # Спосіб 3: через DB
+        if not gender_tag_raw:
+            try:
+                gender_tag_raw = frappe.db.get_value("Subreddit Template", template.name, "gender_tag")
+            except Exception:
+                pass
+        
+        # Дефолт
+        if not gender_tag_raw or not str(gender_tag_raw).strip():
+            gender_tag_raw = "[r4r]"
+        else:
+            gender_tag_raw = str(gender_tag_raw).strip()
+        
+        safe_log_append(logs, f"Gender tag from template: '{gender_tag_raw}' (template name: {template.name})")
+        
+        # Отримуємо title_example з шаблону (для визначення формату, якщо title_format не вказано)
+        # Спробуємо кілька способів отримання поля
+        title_examples_str = None
+        
+        # Спосіб 1: через template.get() (найнадійніший для Frappe документів)
+        try:
+            title_examples_str = template.get("title_example")
+        except Exception:
+            pass
+        
+        # Спосіб 2: через getattr
+        if not title_examples_str and hasattr(template, "title_example"):
+            try:
+                title_examples_str = getattr(template, "title_example", None)
+            except Exception:
+                pass
+        
+        # Спосіб 3: через пряме звернення до атрибута
+        if not title_examples_str and hasattr(template, "__dict__"):
+            try:
+                title_examples_str = template.__dict__.get("title_example", None)
+            except Exception:
+                pass
+        
+        # Спосіб 4: через frappe.db.get_value (якщо інші не спрацювали)
+        if not title_examples_str:
+            try:
+                title_examples_str = frappe.db.get_value("Subreddit Template", template.name, "title_example")
+            except Exception as e:
+                safe_log_append(logs, f"Could not get title_example from DB: {str(e)}")
+        
+        # Конвертуємо в рядок, якщо потрібно
+        if title_examples_str is None:
+            title_examples_str = ""
+        elif not isinstance(title_examples_str, str):
+            title_examples_str = str(title_examples_str)
+        
+        safe_log_append(logs, f"Raw title_example from template (length: {len(title_examples_str)}): '{title_examples_str[:200] if title_examples_str else 'EMPTY'}'")
+        
+        title_examples_list = []
+        if title_examples_str and title_examples_str.strip():
+            # Розділяємо по рядках та очищаємо
+            title_examples_list = [ex.strip() for ex in title_examples_str.split("\n") if ex.strip()]
+            safe_log_append(logs, f"Successfully parsed {len(title_examples_list)} title examples: {title_examples_list[:3]}")
+        else:
+            safe_log_append(logs, f"WARNING: title_example is empty or not found in template. Template name: {template.name}, Has attr: {hasattr(template, 'title_example')}")
+        
+        # Отримуємо формат title з шаблону (якщо вказано)
+        # ПРИКЛАДИ ВИКОРИСТАННЯ title_format для різних типів сабредітів:
+        # Тип 1 (класичний R4R): "{age} [{gender_tag}] {location} - {title_text}"
+        #    Результат: "25 [F4M] New York - Looking for fun"
+        # Тип 2 (з хештегами): "{age} [r4r] #{city} - {title_text}"
+        #    Результат: "30 [r4r] #Jacksonville - Seeking friends"
+        # Тип 3 (без дужок, великі літери): "{age} R4R {location} {title_text}"
+        #    Результат: "22 R4R Riverside looking for friends"
+        # Тип 4 (круглі дужки): "({age}) {gender_tag} - {title_text} [{location}]"
+        #    Результат: "(25) F4M - Looking for fun [New York]"
+        title_format_template = getattr(template, "title_format", None) if hasattr(template, "title_format") else None
+        title_format_from_template = title_format_template and title_format_template.strip()
+        
+        if not title_format_template or not title_format_template.strip():
+            # Якщо title_format не вказано, намагаємося визначити з title_example
+            if title_examples_list:
+                # Беремо перший приклад і намагаємося визначити формат
+                first_example = title_examples_list[0]
+                safe_log_append(logs, f"title_format not specified, trying to infer from example: {first_example}")
+                # Простий парсинг: замінюємо числа на {age}, локації на {location}, решту на {title_text}
+                inferred_format = first_example
+                # Замінюємо числа на початку на {age}
+                inferred_format = re.sub(r'^\d+\s+', '{age} ', inferred_format)
+                # Замінюємо R4R, F4M, M4F тощо на {gender_tag}
+                inferred_format = re.sub(r'\b(R4R|r4r|F4M|M4F|F4F|M4M|F4A|M4A|F4MF|M4MF)\b', '{gender_tag}', inferred_format, flags=re.IGNORECASE)
+                # Замінюємо локації (великі слова після gender_tag) на {location}
+                # Це простий підхід, можна покращити
+                if '{location}' not in inferred_format:
+                    # Шукаємо слово після gender_tag
+                    inferred_format = re.sub(r'\{gender_tag\}\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)', r'{gender_tag} {location}', inferred_format, count=1)
+                # Решту замінюємо на {title_text}
+                if '{title_text}' not in inferred_format:
+                    # Знаходимо де починається опис (після локації або дефісу)
+                    parts = inferred_format.split(' - ', 1)
+                    if len(parts) == 2:
+                        inferred_format = parts[0] + ' - {title_text}'
+                    else:
+                        # Якщо немає дефісу, додаємо {title_text} в кінці
+                        if '{location}' in inferred_format:
+                            inferred_format = inferred_format.replace('{location}', '{location} {title_text}', 1)
+                        else:
+                            inferred_format += ' {title_text}'
+                
+                title_format_template = inferred_format
+                safe_log_append(logs, f"Inferred title_format: {title_format_template}")
+            else:
+                # Дефолтний формат з gender_tag
+                title_format_template = "{age} {gender_tag} #{city} - {title_text}"
+        
+        # Визначаємо, як форматувати gender_tag на основі формату title
+        # Аналізуємо title_format_template, щоб визначити потрібний формат
+        gender_tag = gender_tag_raw
+        
+        # Перевіряємо формат дужок у title_format_template
+        has_square_brackets = "[" in title_format_template and "]" in title_format_template
+        has_round_brackets = "(" in title_format_template and ")" in title_format_template
+        has_uppercase_r4r = "R4R" in title_format_template.upper() and "r4r" not in title_format_template.lower()
+        
+        # Форматуємо gender_tag відповідно до вимог формату
+        if "{gender_tag}" in title_format_template:
+            # Якщо формат вимагає круглі дужки
+            if has_round_brackets and not has_square_brackets:
+                gender_tag = gender_tag_raw.replace("[", "(").replace("]", ")")
+            # Якщо формат вимагає великі літери без дужок
+            elif has_uppercase_r4r and not has_square_brackets and not has_round_brackets:
+                gender_tag = gender_tag_raw.replace("[", "").replace("]", "").replace("(", "").replace(")", "").upper()
+            # Якщо формат вимагає малі літери без дужок
+            elif "r4r" in title_format_template.lower() and not has_square_brackets and not has_round_brackets:
+                gender_tag = gender_tag_raw.replace("[", "").replace("]", "").replace("(", "").replace(")", "").lower()
+            # Інакше використовуємо як є (зазвичай квадратні дужки)
+            else:
+                gender_tag = gender_tag_raw
+        
+        # Замінюємо {gender_tag} у форматі, якщо він є
+        if "{gender_tag}" in title_format_template:
+            title_format_template = title_format_template.replace("{gender_tag}", gender_tag)
+        
+        # Визначаємо формат локації на основі формату title
+        # Якщо формат містить {location} (без хештегу), використовуємо Capitalized формат
+        use_location_capitalized = "{location}" in title_format_template or "{location_full}" in title_format_template
+        if use_location_capitalized:
+            # Форматуємо локацію: перша літера велика, решта малі (Capitalized)
+            location_formatted = final_location.title() if final_location else "City"
+        else:
+            # Використовуємо city без пробілів для хештегу
+            location_formatted = city_for_title
+        
+        # Визначаємо flair на основі вимог шаблону
+        selected_flair = None
+        requires_flair = getattr(template, "requires_flair", False) if hasattr(template, "requires_flair") else False
+        flair_selection_mode = getattr(template, "flair_selection_mode", "none") if hasattr(template, "flair_selection_mode") else "none"
+        available_flairs_str = getattr(template, "available_flairs", "") if hasattr(template, "available_flairs") else ""
+        
+        # Функція для вибору першого доступного flair (крім "No flair")
+        def get_first_available_flair(flairs_list):
+            """Повертає перший доступний flair, крім 'No flair'"""
+            for flair in flairs_list:
+                if flair.lower() != "no flair":
+                    return flair
+            # Якщо всі flair - "No flair", повертаємо перший
+            return flairs_list[0] if flairs_list else None
+        
+        if requires_flair:
+            if flair_selection_mode == "auto":
+                # Автоматично вибираємо flair на основі локації
+                # Але якщо є список available_flairs, спробуємо знайти збіг
+                if available_flairs_str:
+                    available_flairs_list = [f.strip() for f in available_flairs_str.split("\n") if f.strip()]
+                    location_lower = final_location.lower()
+                    
+                    # Шукаємо точний збіг
+                    for flair in available_flairs_list:
+                        if flair.lower() == location_lower:
+                            selected_flair = flair
+                            break
+                    
+                    # Якщо не знайдено, використовуємо перший доступний
+                    if not selected_flair:
+                        selected_flair = get_first_available_flair(available_flairs_list)
+                        safe_log_append(logs, f"Flair auto-selected (no match found): {selected_flair} (from location: {final_location})")
+                    else:
+                        safe_log_append(logs, f"Flair auto-selected from location: {selected_flair}")
+                else:
+                    # Якщо немає списку, використовуємо саму локацію
+                    selected_flair = final_location
+                    safe_log_append(logs, f"Flair auto-selected from location: {selected_flair}")
+                    
+            elif flair_selection_mode == "manual" and available_flairs_str:
+                # Вибираємо flair зі списку available_flairs
+                available_flairs_list = [f.strip() for f in available_flairs_str.split("\n") if f.strip()]
+                
+                # Покращений пошук flair за локацією
+                selected_flair = None
+                location_lower = final_location.lower()
+                
+                # Спочатку шукаємо точний збіг
+                for flair in available_flairs_list:
+                    if flair.lower() == location_lower:
+                        selected_flair = flair
+                        break
+                
+                # Якщо не знайдено, шукаємо частковий збіг (наприклад, OrlandoCasual -> Orlando)
+                if not selected_flair:
+                    # Видаляємо слова типу "Casual", "R4R" з локації для пошуку
+                    location_clean = re.sub(r'\s*(casual|r4r|personals|meetup|dating|hookup)\s*', '', location_lower, flags=re.IGNORECASE)
+                    for flair in available_flairs_list:
+                        flair_lower = flair.lower()
+                        # Перевіряємо чи локація міститься у flair або навпаки
+                        if location_clean in flair_lower or flair_lower in location_clean:
+                            selected_flair = flair
+                            break
+                        # Перевіряємо чи є спільні слова
+                        location_words = set(location_clean.split())
+                        flair_words = set(flair_lower.split())
+                        if location_words & flair_words:  # Перетин множин
+                            selected_flair = flair
+                            break
+                
+                # Якщо все ще не знайдено, використовуємо перший доступний (але не "No flair")
+                if not selected_flair:
+                    selected_flair = get_first_available_flair(available_flairs_list)
+                    safe_log_append(logs, f"Flair selected (no match found, using first available): {selected_flair} (from location: {final_location})")
+                else:
+                    safe_log_append(logs, f"Flair selected from available list: {selected_flair} (from location: {final_location})")
+                    
+            elif requires_flair and available_flairs_str:
+                # Якщо requires_flair=True, але mode=none або manual без списку, все одно вибираємо flair
+                available_flairs_list = [f.strip() for f in available_flairs_str.split("\n") if f.strip()]
+                if available_flairs_list:
+                    # Шукаємо за локацією або використовуємо перший доступний
+                    selected_flair = None
+                    location_lower = final_location.lower()
+                    for flair in available_flairs_list:
+                        if location_lower in flair.lower() or flair.lower() in location_lower:
+                            selected_flair = flair
+                            break
+                    if not selected_flair:
+                        selected_flair = get_first_available_flair(available_flairs_list)
+                    safe_log_append(logs, f"Flair auto-selected (required, mode=none): {selected_flair}")
+        
+        # Якщо flair обов'язковий, але не вибрано - викидаємо помилку
+        if requires_flair and not selected_flair:
+            frappe.throw(f"Flair is required for subreddit r/{template.sub}, but no flair could be determined. Please configure available_flairs in the template.")
+        
+        safe_log_append(logs, f"Final Context for AI: Age={final_age}, Loc={final_location}, CityTag={city_for_title}, LocationFormatted={location_formatted}, GenderTag={gender_tag}, Job={final_profession}, TitleFormat={title_format_template}, Flair={selected_flair}")
 
-You are writing AS the persona described below. You must embody this character completely.
+        # --- 2. SYSTEM CONTENT (СТВОРЮЄМО КОНТЕКСТ І ПРАВИЛА) ---
+        system_content = f"""You are a Reddit expert writing AS a specific persona.
+Complete immersion is required.
 
 IDENTITY CONTEXT:
-- Reddit username: {account_username}
-- Persona/Character name: {final_name}"""
-        
-        if agent_age:
-            system_content += f"\n- Character age: {agent_age} years old"
-        else:
-            system_content += f"\n- Character age: {final_age} years old (use this exact value)"
-        
-        if agent_profession:
-            system_content += f"\n- Character profession/hobby: {agent_profession}"
-        else:
-            system_content += f"\n- Character profession/hobby: {final_profession} (use this exact value)"
-        
-        if agent_location:
-            system_content += f"\n- Character location/city: {agent_location}"
-        else:
-            system_content += f"\n- Character location/city: {final_location} (use this exact value)"
+- Persona Name: {final_name}
+- Age: {final_age}
+- Location: {final_location}
+- Profession/Hobby: {final_profession}
+- Writing Style: {agent_style}"""
         
         if agent_custom_instructions:
-            system_content += f"\n- Custom writing instructions: {agent_custom_instructions}"
+            system_content += f"\n- Custom Instructions: {agent_custom_instructions}"
+        
+        # Формуємо приклад title на основі шаблону
+        # Створюємо копію шаблону для форматування (gender_tag вже замінений)
+        example_format = title_format_template
+        try:
+            example_title = example_format.format(
+                age=final_age,
+                city=city_for_title,
+                city_full=final_location,
+                location=location_formatted,
+                location_full=location_formatted,
+                title_text="Looking for fun and connection"
+            )
+        except KeyError:
+            # Якщо є інші плейсхолдери, просто замінюємо основні
+            example_title = example_format.replace("{age}", str(final_age))
+            example_title = example_title.replace("{city}", city_for_title)
+            example_title = example_title.replace("{city_full}", final_location)
+            example_title = example_title.replace("{location}", location_formatted)
+            example_title = example_title.replace("{location_full}", location_formatted)
+            example_title = example_title.replace("{title_text}", "Looking for fun and connection")
+        
+        # Використовуємо вже отриманий title_examples_list (отримано вище при визначенні формату)
+        if title_examples_list:
+            safe_log_append(logs, f"Using {len(title_examples_list)} title examples from template for AI instructions")
+        
+        # Формуємо опис плейсхолдерів для інструкцій
+        placeholder_descriptions = []
+        if "{age}" in title_format_template:
+            placeholder_descriptions.append(f"- {{age}} = {final_age} (use this exact number)")
+        if "{city}" in title_format_template:
+            placeholder_descriptions.append(f"- {{city}} = {city_for_title} (city name without spaces, for hashtag)")
+        if "{city_full}" in title_format_template:
+            placeholder_descriptions.append(f"- {{city_full}} = {final_location} (full city name with spaces)")
+        if "{location}" in title_format_template or "{location_full}" in title_format_template:
+            placeholder_descriptions.append(f"- {{location}} or {{location_full}} = {location_formatted} (location name, Capitalized)")
+        if "{title_text}" in title_format_template:
+            placeholder_descriptions.append(f"- {{title_text}} = Your engaging title text (5-10 words)")
+        
+        placeholder_desc_text = "\n".join(placeholder_descriptions) if placeholder_descriptions else f"- Use the exact format shown in the template"
+        
+        # Формуємо блок з прикладами - ОБОВ'ЯЗКОВО додаємо, якщо вони є
+        examples_section = ""
+        if title_examples_list:
+            examples_text = "\n".join([f"  - {ex}" for ex in title_examples_list[:5]])  # Максимум 5 прикладів
+            
+            # Аналізуємо приклади для визначення pattern
+            example_gender_tags = []
+            example_locations = []
+            for ex in title_examples_list[:5]:
+                # Шукаємо gender tags в прикладах
+                gender_match = re.search(r'\[([A-Z]\d+[A-Z]+)\]|\(([A-Z]\d+[A-Z]+)\)|([A-Z]\d+[A-Z]+)', ex)
+                if gender_match:
+                    tag = gender_match.group(1) or gender_match.group(2) or gender_match.group(3)
+                    if tag and tag not in example_gender_tags:
+                        example_gender_tags.append(tag)
+                
+                # Шукаємо локації (після gender tag або після #)
+                location_match = re.search(r'#([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)|\[[A-Z]\d+[A-Z]+\]\s+#?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)', ex)
+                if location_match:
+                    loc = location_match.group(1) or location_match.group(2)
+                    if loc and loc not in example_locations:
+                        example_locations.append(loc)
+            
+            # Формуємо додаткові інструкції на основі прикладів
+            examples_analysis = ""
+            if example_gender_tags:
+                unique_tags = list(set(example_gender_tags))
+                examples_analysis += f"\n- Gender tags used in examples: {', '.join(unique_tags)}"
+            if example_locations:
+                unique_locs = list(set(example_locations))
+                examples_analysis += f"\n- Locations used in examples: {', '.join(unique_locs[:5])}"
+            
+            examples_section = f"""
+
+REAL EXAMPLES FROM r/{template.sub} (USE THESE AS REFERENCE - THEY SHOW THE EXACT FORMAT REQUIRED):
+{examples_text}{examples_analysis}
+
+CRITICAL INSTRUCTIONS:
+1. Your title MUST match the EXACT format shown in these examples
+2. Use the SAME gender tag format as in the examples (e.g., if examples show [F4M], use [F4M], NOT [r4r])
+3. Use the SAME location format as in the examples (e.g., if examples show #Brighton Park, use a specific neighborhood, NOT just #Chicago)
+4. Follow the EXACT capitalization, brackets, hashtags, and separators from the examples
+5. These examples are REAL approved titles - your title must be indistinguishable from them in format"""
+            safe_log_append(logs, f"Added {len(title_examples_list[:5])} real examples to system_content. Gender tags in examples: {example_gender_tags}, Locations: {example_locations[:3]}")
+        else:
+            safe_log_append(logs, "WARNING: No title_examples found - AI will use only template format")
         
         system_content += f"""
 
-CRITICAL RULES - VIOLATION WILL RESULT IN REJECTION:
-1. NEVER use ANY text in square brackets [like this] in the title or content
-2. NEVER use placeholders like [Age], [Gender], [City], [Location], [Connection Type], [describe interests], [list limits], [mention availability]
-3. ALWAYS use REAL VALUES from the IDENTITY CONTEXT above
-4. If age is "{final_age}", write "{final_age}" - NOT "[Age]" or "[age]"
-5. If location is "{final_location}", write "{final_location}" - NOT "[City]" or "[City name]"
-6. If profession is "{final_profession}", write "{final_profession}" - NOT "[Profession]" or "[specific interests]"
-7. Write complete, natural sentences with ACTUAL information - no brackets, no placeholders, no templates
+STRICT TITLE INSTRUCTIONS - REDDIT REQUIRED FORMAT:
+The Title MUST follow this EXACT format template: "{title_format_template}"
 
-IMPORTANT: Write the post AS THIS PERSON. Use their exact age ({final_age}), location ({final_location}), and profession/hobby ({final_profession}). Make it authentic and personal."""
+FORMAT EXPLANATION:
+{placeholder_desc_text}
+
+GENERATED EXAMPLE: "{example_title}"{examples_section}
+
+CRITICAL - ABSOLUTE REQUIREMENTS:
+- Replace {{age}} with {final_age} (exact number, no formatting)
+- Replace location placeholders with {location_formatted} (Capitalized, no hashtag)
+- Replace city placeholders with {city_for_title} (for hashtag format) or {final_location} (for full name)
+- Replace {{title_text}} with your engaging description (5-10 words, plain text only)
+- Keep all brackets, hashtags, separators, and capitalization EXACTLY as in the template
+- DO NOT add extra brackets, hashtags, or separators that are not in the template
+- DO NOT use markdown formatting (**bold**, *italic*, etc.) in the title
+- DO NOT change bracket types: if template has [], use []. If (), use (). If none, use none.
+- DO NOT add emojis, special characters, or decorative elements
+- The title must be plain text that matches the template format EXACTLY
+
+BODY CONTENT RULES:
+1. USE REAL VALUES: Instead of placeholders, use "{final_location}" and "{final_profession}".
+2. NO BRACKETS in the body text. Do not write [Age] or [City].
+3. Make it personal, as if you are {final_name} posting from {final_location}."""
             
         safe_log_append(logs, "Prompt prepared: Account and agent info added to System message and instructions")
 
-        # 5. JSON Schema
+        # --- 3. USER MESSAGE (ЗАПИТ НА ГЕНЕРАЦІЮ) ---
+        placeholder_replacements = []
+        if "{age}" in title_format_template:
+            placeholder_replacements.append(f"- {{age}} → {final_age}")
+        if "{city}" in title_format_template:
+            placeholder_replacements.append(f"- {{city}} → {city_for_title}")
+        if "{city_full}" in title_format_template:
+            placeholder_replacements.append(f"- {{city_full}} → {final_location}")
+        if "{location}" in title_format_template or "{location_full}" in title_format_template:
+            placeholder_replacements.append(f"- {{location}} or {{location_full}} → {location_formatted}")
+        if "{title_text}" in title_format_template:
+            placeholder_replacements.append(f"- {{title_text}} → Your engaging title (5-10 words)")
+        
+        replacements_text = "\n   ".join(placeholder_replacements) if placeholder_replacements else f"- Follow the exact format shown"
+        
+        # Формуємо блок з реальними прикладами для user message - ОБОВ'ЯЗКОВО додаємо
+        real_examples_section = ""
+        if title_examples_list:
+            real_examples_text = "\n   ".join([f"- {ex}" for ex in title_examples_list[:5]])  # Показуємо до 5 прикладів
+            
+            # Витягуємо конкретні приклади gender tags та locations з прикладів
+            example_tags = []
+            example_locs = []
+            for ex in title_examples_list[:5]:
+                # Gender tag
+                tag_match = re.search(r'\[([A-Z]\d+[A-Z]+)\]|\(([A-Z]\d+[A-Z]+)\)|([A-Z]\d+[A-Z]+)', ex)
+                if tag_match:
+                    tag = tag_match.group(1) or tag_match.group(2) or tag_match.group(3)
+                    if tag and tag not in example_tags:
+                        example_tags.append(tag)
+                
+                # Location (після # або після gender tag)
+                loc_match = re.search(r'#([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)|\[[A-Z]\d+[A-Z]+\]\s+#?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)', ex)
+                if loc_match:
+                    loc = loc_match.group(1) or loc_match.group(2)
+                    if loc and loc not in example_locs:
+                        example_locs.append(loc)
+            
+            examples_detail = ""
+            if example_tags:
+                examples_detail += f"\n   - Gender tags in examples: {', '.join(example_tags)}"
+            if example_locs:
+                examples_detail += f"\n   - Locations in examples: {', '.join(example_locs[:5])}"
+            
+            real_examples_section = f"""
+   
+   REAL EXAMPLES FROM r/{template.sub} (REQUIRED FORMAT):
+   {real_examples_text}{examples_detail}
+   
+   CRITICAL REQUIREMENTS - YOUR TITLE MUST:
+   1. Use the EXACT gender tag format from examples (e.g., {'[F4M]' if example_tags and 'F4M' in str(example_tags) else '[r4r]'} - NOT [r4r] unless examples show [r4r])
+   2. Use a SPECIFIC location/neighborhood from examples format (e.g., {'#Brighton Park' if example_locs and 'Brighton' in str(example_locs) else '#Chicago'} - use neighborhood names, NOT just city name)
+   3. Match the EXACT structure: {title_examples_list[0] if title_examples_list else 'age [tag] #location'}
+   4. Use the SAME capitalization, brackets, hashtags, and separators
+   5. Be indistinguishable from these examples in format
+   
+   DO NOT use generic [r4r] or generic city names - use what the examples show!"""
+            safe_log_append(logs, f"Added {len(title_examples_list[:5])} real examples to user_message_content. Tags: {example_tags}, Locations: {example_locs[:3]}")
+        else:
+            safe_log_append(logs, "WARNING: No title_examples found for user message")
+        
+        user_message_content = f"""Generate a Reddit post for r/{template.sub}.
+
+ABSOLUTE REQUIREMENTS:
+1. Title MUST follow this EXACT format template: "{title_format_template}"
+   Generated example: "{example_title}"{real_examples_section}
+   
+   Replace placeholders:
+   {replacements_text}
+   
+2. Body content must be natural and use these real details:
+   - Your age: {final_age}
+   - Your location: {final_location}
+   - Your profession: {final_profession}
+   
+3. Rules from template: {strip_html(template.rules) if template.rules else "None"}
+4. Exclusions: {template.body_exclusion_words if template.body_exclusion_words else "None"}"""
+        
+        if requires_flair and selected_flair:
+            user_message_content += f"\n5. Flair requirement: This subreddit requires flair '{selected_flair}' to be set when posting."
+        
+        user_message_content += f"""
+
+CRITICAL FORMAT REQUIREMENTS - VIOLATION WILL RESULT IN POST REJECTION:
+- Title MUST follow the template format EXACTLY: "{title_format_template}"
+- Replace all placeholders with actual values (no placeholders should remain)
+- Use {location_formatted} for location (Capitalized, no hashtag) if format requires {{location}}
+- Use {city_for_title} for city hashtag format if format requires {{city}} or #{{city}}
+- DO NOT use markdown formatting (**bold**, *italic*, `code`, etc.) in title or body
+- DO NOT add emojis, special Unicode characters, or decorative symbols
+- DO NOT change bracket types: if template has [], use []. If (), use (). If none, use none.
+- Keep brackets, hashtags, separators, and capitalization EXACTLY as in the template
+- The gender tag {gender_tag} is already included in the format - do not change it
+- Do not use any square brackets in the body text
+- Title must be plain ASCII text only (no markdown, no formatting, no decorations)
+
+IMPORTANT REMINDERS:
+- If the format uses round brackets (), do NOT use square brackets []
+- If the format uses square brackets [], do NOT use round brackets ()
+- If the format has no brackets, do NOT add any brackets
+- If the format uses uppercase R4R, do NOT use lowercase r4r
+- If the format uses lowercase r4r, do NOT use uppercase R4R
+"""
+
+        # --- 4. JSON Schema ---
+        example_title_schema = example_title  # Використовуємо вже сформований example_title
+        
         json_schema = {
-            "name": "reddit_post_response",
+            "name": "reddit_post",
             "strict": True,
             "schema": {
                 "type": "object",
                 "properties": {
-                    "title": { "type": "string", "description": "Engaging title" },
-                    "post_type": { "type": "string", "enum": ["Text", "Link"] },
-                    "url_to_share": { "type": "string", "description": "URL if Link type, else empty" },
-                    "content": { "type": "string", "description": "Body text" },
-                    "hashtags": { "type": "string", "description": "Relevant hashtags" }
+                    "title": {"type": "string", "description": f"Title following format: {title_format_template}. Example: {example_title_schema}"},
+                    "content": {"type": "string", "description": "Body text without brackets"},
+                    "hashtags": {"type": "string"},
+                    "post_type": {"type": "string", "enum": ["Text", "Link"]},
+                    "url_to_share": {"type": "string", "description": "URL if Link type, else empty"}
                 },
-                "required": ["title", "post_type", "url_to_share", "content", "hashtags"],
+                "required": ["title", "content", "hashtags", "post_type", "url_to_share"],
                 "additionalProperties": False
             }
         }
 
-        # 6. Запит до AI
-        safe_log_append(logs, "Sending request to OpenAI")
-        
-        
-        user_message_content = f"""Generate a Reddit post for r/{template.sub} with the following requirements:
-
-Account username: {account_username or 'Unknown'}
-
-PROMPT/TEMPLATE INSTRUCTIONS:
-{instructions}
-
-RULES TO FOLLOW:
-{rules}
-
-WORDS TO AVOID:
-{exclusions}
-
-ABSOLUTE REQUIREMENTS - VIOLATION WILL RESULT IN REJECTION:
-
-1. FORBIDDEN: Any text in square brackets [like this] is ABSOLUTELY FORBIDDEN in title or content.
-   - NEVER write: [Age], [Gender], [City], [Location], [Connection Type], [describe interests], [list limits], [mention availability]
-   - NEVER write: [age], [gender], [city], [City name], [Kind of Connection], [specific interests]
-   - NEVER write: ANY text between square brackets
-
-2. REQUIRED VALUES TO USE:
-   - Age: Use "{final_age}" (exactly this value, NOT "[Age]" or "[age]")
-   - Location: Use "{final_location}" (exactly this value, NOT "[City]" or "[City name]")
-   - Profession/Hobby: Use "{final_profession}" (exactly this value, NOT "[Profession]" or "[specific interests]")
-   - Name: Use "{final_name}" (exactly this value)
-
-3. EXAMPLES OF CORRECT vs INCORRECT:
-   CORRECT TITLE: "{final_age}M looking for friendship in {final_location}"
-   INCORRECT TITLE: "[Gender][Age] Searching for [Kind of Connection] Nearby [City name]"
-   
-   CORRECT CONTENT: "Hey! I'm {final_name}, a {final_age}-year-old {final_profession} based in {final_location}."
-   INCORRECT CONTENT: "Hey! I'm a [age] [gender] looking to connect..."
-   
-   CORRECT: "I'm a {final_profession} who loves hiking and coffee shops"
-   INCORRECT: "I'm into [specific interests]"
-   
-   CORRECT: "Available evenings and weekends"
-   INCORRECT: "[mention your availability]"
-
-4. Write natural, complete sentences with REAL information - no brackets, no placeholders, no templates.
-
-5. The title and body must be READY TO POST IMMEDIATELY - no editing needed, no placeholders to fill.
-
-6. Use the EXACT values specified above:
-   - Age: "{final_age}" (write this number, not "[Age]")
-   - Location: "{final_location}" (write this city name, not "[City]")
-   - Profession: "{final_profession}" (write this profession, not "[Profession]")
-
-7. Make it personal and authentic - write as if you ARE this person ({final_name}), using their exact details.
-
-REMEMBER: If you use ANY square brackets [like this] in your response, it will be REJECTED. Write ONLY real values, no placeholders."""
+        # --- 5. ЗАПИТ ДО OPENAI ---
+        safe_log_append(logs, f"Sending request to OpenAI with custom title format: {title_format_template}")
         
         completion = client.chat.completions.create(
             model="gpt-4o-2024-08-06",
@@ -451,108 +876,136 @@ REMEMBER: If you use ANY square brackets [like this] in your response, it will b
             frappe.throw("No response from OpenAI")
         
         response_content = completion.choices[0].message.content
-        if not response_content:
-            frappe.throw("Empty response from OpenAI")
-        
+        safe_log_append(logs, "OpenAI response received")
+
         try:
             ai_response = json.loads(response_content)
-        except json.JSONDecodeError as e:
-            frappe.throw(f"Invalid JSON response from OpenAI: {str(e)}")
-        
-        if not isinstance(ai_response, dict):
-            frappe.throw("Invalid response format from OpenAI")
-        
-        safe_log_append(logs, "OpenAI response received")
-        
+        except json.JSONDecodeError:
+            frappe.throw("Invalid JSON from OpenAI")
+
         title = ai_response.get("title", "") or ""
         content = ai_response.get("content", "") or ""
-        
-        if not isinstance(title, str):
-            title = str(title) if title else ""
-        if not isinstance(content, str):
-            content = str(content) if content else ""
-        
-        safe_final_age = str(final_age) if final_age else "28"
-        safe_final_location = str(final_location) if final_location else "New Haven"
-        safe_final_profession = str(final_profession) if final_profession else "photographer"
-        
 
-        placeholder_replacements = {
-            r'\[Age\]': safe_final_age,
-            r'\[age\]': safe_final_age,
-            r'\[AGE\]': safe_final_age,
-            r'\[Gender\]': 'M',  # За замовчуванням, можна змінити
-            r'\[gender\]': 'M',
-            r'\[GENDER\]': 'M',
-            r'\[City\]': safe_final_location,
-            r'\[city\]': safe_final_location,
-            r'\[CITY\]': safe_final_location,
-            r'\[City name\]': safe_final_location,
-            r'\[city name\]': safe_final_location,
-            r'\[Location\]': safe_final_location,
-            r'\[location\]': safe_final_location,
-            r'\[LOCATION\]': safe_final_location,
-            r'\[Connection Type\]': 'friendship',
-            r'\[connection type\]': 'friendship',
-            r'\[Kind of Connection\]': 'friendship',
-            r'\[kind of connection\]': 'friendship',
-            r'\[Type of Connection\]': 'friendship',
-            r'\[type of connection\]': 'friendship',
-            r'\[describe interests\]': safe_final_profession,
-            r'\[specific interests\]': safe_final_profession,
-            r'\[list limits\]': 'Respectful boundaries',
-            r'\[mention your availability\]': 'Available evenings and weekends',
-            r'\[mention availability\]': 'Available evenings and weekends',
-        }
+        # --- 6. ОБРОБКА ТА ВАЛІДАЦІЯ TITLE ---
+        # Перевіряємо та виправляємо title відповідно до формату шаблону
         
-        import re
-        original_title = title
-        original_content = content
-        
-        try:
-            for pattern, replacement in placeholder_replacements.items():
-                if title:
-                    title = re.sub(pattern, str(replacement), title, flags=re.IGNORECASE)
-                if content:
-                    content = re.sub(pattern, str(replacement), content, flags=re.IGNORECASE)
+        if title:
+            # А. Захищаємо правильні теги з формату (gender_tag та інші)
+            # Спочатку захищаємо gender_tag
+            title = title.replace(gender_tag, f"___GENDER_TAG___")
             
-            if title:
-                title = re.sub(r'\[.*?\]', '', title)
-            if content:
-                content = re.sub(r'\[.*?\]', '', content)
-        except Exception as e:
-            safe_log_append(logs, f"Error during placeholder replacement: {str(e)}")
-        
-        if title != original_title or content != original_content:
-            safe_log_append(logs, f"WARNING: Placeholders found and replaced in AI response")
-            safe_log_append(logs, f"Original title: {original_title[:100]}")
-            safe_log_append(logs, f"Fixed title: {title[:100]}")
+            # Захищаємо інші можливі теги з формату
+            protected_tags = []
+            tag_patterns = re.findall(r'\[[^\]]+\]', title_format_template)
+            for i, tag in enumerate(tag_patterns):
+                if tag != gender_tag:  # gender_tag вже захищений
+                    placeholder = f"___PROTECTED_TAG_{i}___"
+                    protected_tags.append((placeholder, tag))
+                    title = title.replace(tag, placeholder)
             
-            if isinstance(ai_response, dict):
-                ai_response["title"] = title
-                ai_response["content"] = content
-            else:
-                safe_log_append(logs, f"ERROR: ai_response is not a dict, cannot update")
+            # Видаляємо інші дужки (плейсхолдери типу [Age], [City])
+            title = re.sub(r'\[.*?\]', '', title)
+            
+            # Повертаємо захищені теги
+            title = title.replace("___GENDER_TAG___", gender_tag)
+            for placeholder, tag in protected_tags:
+                title = title.replace(placeholder, tag)
+            
+            # Б. Перевіряємо, чи title відповідає формату шаблону
+            # Якщо ні, намагаємося виправити, використовуючи формат шаблону
+            try:
+                # Спробуємо витягти title_text з відповіді AI
+                # Шукаємо текст після останнього роздільника (дефіс, пробіл після локації тощо)
+                title_text = None
+                
+                # Спробуємо знайти title_text після дефісу
+                title_text_match = re.search(r'-\s*(.+)$', title)
+                if title_text_match:
+                    title_text = title_text_match.group(1).strip()
+                else:
+                    # Спробуємо знайти текст після локації (для форматів типу "Age R4R Location text")
+                    # Видаляємо age, gender_tag, location і залишаємо решту
+                    temp_title = title
+                    temp_title = re.sub(rf'^{re.escape(str(final_age))}\s*', '', temp_title)
+                    temp_title = re.sub(rf'{re.escape(gender_tag)}\s*', '', temp_title)
+                    temp_title = re.sub(rf'{re.escape(location_formatted)}\s*', '', temp_title, flags=re.IGNORECASE)
+                    temp_title = re.sub(rf'{re.escape(final_location)}\s*', '', temp_title, flags=re.IGNORECASE)
+                    if temp_title.strip():
+                        title_text = temp_title.strip()
+                
+                if not title_text:
+                    # Якщо не вдалося витягти, використовуємо весь title як title_text
+                    title_text = title.strip()
+                
+                # Формуємо title згідно з шаблоном
+                try:
+                    title = title_format_template.format(
+                        age=final_age,
+                        city=city_for_title,
+                        city_full=final_location,
+                        location=location_formatted,
+                        location_full=location_formatted,
+                        title_text=title_text
+                    )
+                except KeyError:
+                    # Якщо в шаблоні є інші плейсхолдери, просто замінюємо основні
+                    title = title_format_template.replace("{age}", str(final_age))
+                    title = title.replace("{city}", city_for_title)
+                    title = title.replace("{city_full}", final_location)
+                    title = title.replace("{location}", location_formatted)
+                    title = title.replace("{location_full}", location_formatted)
+                    title = title.replace("{title_text}", title_text)
+            except Exception as e:
+                safe_log_append(logs, f"Warning: Could not format title according to template: {str(e)}")
+            
+            # В. Очищаємо від markdown форматування та спеціальних символів
+            # Видаляємо markdown bold (**text**)
+            title = re.sub(r'\*\*(.*?)\*\*', r'\1', title)
+            # Видаляємо markdown italic (*text*)
+            title = re.sub(r'\*(.*?)\*', r'\1', title)
+            # Видаляємо markdown code (`text`)
+            title = re.sub(r'`(.*?)`', r'\1', title)
+            # Видаляємо markdown links [text](url)
+            title = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', title)
+            # Видаляємо зайві пробіли
+            title = re.sub(r'\s+', ' ', title).strip()
+            
+            # Перевіряємо, чи title не містить markdown після очищення
+            if '**' in title or '*' in title or '`' in title:
+                safe_log_append(logs, f"WARNING: Title may still contain markdown after cleaning: {title}")
 
+        if content:
+            # В тілі поста видаляємо ВСІ дужки без винятків
+            content = re.sub(r'\[.*?\]', '', content).strip()
+            # Очищаємо від markdown форматування
+            content = re.sub(r'\*\*(.*?)\*\*', r'\1', content)
+            content = re.sub(r'\*(.*?)\*', r'\1', content)
+            content = re.sub(r'`(.*?)`', r'\1', content)
+            content = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', content)
+            
+        safe_log_append(logs, f"Processed Title: {title}")
+
+        # --- 7. СТВОРЕННЯ ДОКУМЕНТА ---
         safe_log_append(logs, "Creating Reddit Post doc")
+        
         subreddit_name = template.sub.strip()
         if not subreddit_name.startswith("r/"):
             subreddit_name = f"r/{subreddit_name}"
-        safe_log_append(logs, f"Subreddit name for post: {subreddit_name}")
-        
+            
         new_post = frappe.get_doc({
             "doctype": "Reddit Post",
-            "title": ai_response.get("title"),
-            "post_type": ai_response.get("post_type"),
-            "url_to_share": ai_response.get("url_to_share"),
-            "body_text": ai_response.get("content"),
-            "hashtags": ai_response.get("hashtags"),
+            "title": title,
+            "post_type": ai_response.get("post_type", "Text"),
+            "url_to_share": ai_response.get("url_to_share", ""),
+            "body_text": content,
+            "hashtags": ai_response.get("hashtags", ""),
             "subreddit_name": subreddit_name,
             "subreddit_group": template.group,
             "account": account_doc.name,
             "account_username": account_username or "Unknown",
             "status": "Created",
-            "template_used": template.name
+            "template_used": template.name,
+            "flair": selected_flair if selected_flair else ""
         })
         
         new_post.insert(ignore_permissions=True)
