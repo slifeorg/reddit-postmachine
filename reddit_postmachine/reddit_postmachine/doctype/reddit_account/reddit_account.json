@@ -1,279 +1,288 @@
 {
-    "actions": [],
-    "allow_import": 1,
-    "allow_rename": 1,
-    "creation": "2025-12-01 10:27:06.215494",
-    "doctype": "DocType",
-    "engine": "InnoDB",
-    "field_order": [
-     "tab_overview",
-     "section_credentials",
-     "username",
-     "password",
-     "status",
-     "subreddit_group",
-     "column_break_1",
-     "account_version",
-     "is_posting_paused",
-     "tab_persona",
-     "section_persona",
-     "assistant_name",
-     "assistant_age",
-     "column_break_persona",
-     "assistant_profession",
-     "assistant_location",
-     "section_prompts",
-     "custom_prompt_instructions",
-     "account_description",
-     "posting_style",
-     "tab_rhythm",
-     "section_timing",
-     "rhythm_start_time",
-     "rhythm_end_time",
-     "column_break_rhythm",
-     "pusher_min_count",
-     "pusher_max_count",
-     "working_schedule",
-     "tab_system",
-     "section_system",
-     "airtable_id",
-     "last_activity",
-     "last_sync",
-     "column_break_system",
-     "active_post",
-     "posts_today_count"
-    ],
-    "fields": [
-     {
-      "fieldname": "tab_overview",
-      "fieldtype": "Tab Break",
-      "label": "Overview"
-     },
-     {
-      "fieldname": "section_credentials",
-      "fieldtype": "Section Break",
-      "label": "Credentials"
-     },
-     {
-      "fieldname": "username",
-      "fieldtype": "Data",
-      "in_list_view": 1,
-      "label": "Username",
-      "reqd": 1,
-      "unique": 1
-     },
-     {
-      "fieldname": "password",
-      "fieldtype": "Password",
-      "label": "Password"
-     },
-     {
-      "default": "Active",
-      "fieldname": "status",
-      "fieldtype": "Select",
-      "in_list_view": 1,
-      "in_standard_filter": 1,
-      "label": "Status",
-      "options": "Active\nInactive\nBlocked"
-     },
-     {
-      "fieldname": "subreddit_group",
-      "fieldtype": "Select",
-      "in_list_view": 1,
-      "label": "Subreddit Group",
-      "options": "East\nWest",
-      "reqd": 1
-     },
-     {
-      "fieldname": "column_break_1",
-      "fieldtype": "Column Break"
-     },
-     {
-      "fieldname": "account_version",
-      "fieldtype": "Data",
-      "label": "Account Version"
-     },
-     {
-      "default": "0",
-      "fieldname": "is_posting_paused",
-      "fieldtype": "Check",
-      "label": "Is Posting Paused"
-     },
-     {
-      "fieldname": "tab_persona",
-      "fieldtype": "Tab Break",
-      "label": "Persona (AI)"
-     },
-     {
-      "fieldname": "section_persona",
-      "fieldtype": "Section Break",
-      "label": "Character Details"
-     },
-     {
-      "fieldname": "assistant_name",
-      "fieldtype": "Data",
-      "label": "Assistant Name"
-     },
-     {
-      "fieldname": "assistant_age",
-      "fieldtype": "Int",
-      "label": "Assistant Age"
-     },
-     {
-      "fieldname": "column_break_persona",
-      "fieldtype": "Column Break"
-     },
-     {
-      "fieldname": "assistant_profession",
-      "fieldtype": "Data",
-      "label": "Hobby / Profession"
-     },
-     {
-      "fieldname": "assistant_location",
-      "fieldtype": "Data",
-      "label": "Location"
-     },
-     {
-      "fieldname": "section_prompts",
-      "fieldtype": "Section Break",
-      "label": "AI Instructions"
-     },
-     {
-      "description": "Specific rules for this account's tone of voice",
-      "fieldname": "custom_prompt_instructions",
-      "fieldtype": "Small Text",
-      "label": "Custom Prompt Instructions"
-     },
-     {
-      "description": "General description used for AI context generation",
-      "fieldname": "account_description",
-      "fieldtype": "Small Text",
-      "label": "Account Description"
-     },
-     {
-        "description": "Posting Style",
-        "fieldname": "posting_style",
-        "fieldtype": "Data",
-        "label": "Posting Style"
-       },
-     {
-      "fieldname": "tab_rhythm",
-      "fieldtype": "Tab Break",
-      "label": "Rhythm"
-     },
-     {
-      "fieldname": "section_timing",
-      "fieldtype": "Section Break",
-      "label": "Timing"
-     },
-     {
-      "fieldname": "rhythm_start_time",
-      "fieldtype": "Time",
-      "label": "Start Time"
-     },
-     {
-      "fieldname": "rhythm_end_time",
-      "fieldtype": "Time",
-      "label": "End Time"
-     },
-     {
-      "fieldname": "column_break_rhythm",
-      "fieldtype": "Column Break"
-     },
-     {
-      "fieldname": "pusher_min_count",
-      "fieldtype": "Int",
-      "label": "Min Posts / Cycle"
-     },
-     {
-      "fieldname": "pusher_max_count",
-      "fieldtype": "Int",
-      "label": "Max Posts / Cycle"
-     },
-     {
-      "fieldname": "working_schedule",
-      "fieldtype": "JSON",
-      "hidden": 1,
-      "label": "Working Schedule (Legacy)"
-     },
-     {
-      "fieldname": "tab_system",
-      "fieldtype": "Tab Break",
-      "label": "System"
-     },
-     {
-      "fieldname": "section_system",
-      "fieldtype": "Section Break"
-     },
-     {
-      "fieldname": "airtable_id",
-      "fieldtype": "Data",
-      "label": "Airtable ID",
-      "read_only": 1
-     },
-     {
-      "fieldname": "last_activity",
-      "fieldtype": "Datetime",
-      "label": "Last Activity",
-      "read_only": 1
-     },
-     {
-      "fieldname": "last_sync",
-      "fieldtype": "Datetime",
-      "label": "Last Sync",
-      "read_only": 1
-     },
-     {
-      "fieldname": "column_break_system",
-      "fieldtype": "Column Break"
-     },
-     {
-      "fieldname": "active_post",
-      "fieldtype": "Link",
-      "label": "Active Post",
-      "options": "Reddit Post",
-      "read_only": 1
-     },
-     {
-      "default": "0",
-      "fieldname": "posts_today_count",
-      "fieldtype": "Int",
-      "label": "Posts Today Count",
-      "read_only": 1
-     }
-    ],
-    "grid_page_length": 50,
-    "index_web_pages_for_search": 1,
-    "links": [],
-    "modified": "2025-12-01 10:27:06.215494",
-    "modified_by": "Administrator",
-    "module": "Reddit-Postmachine",
-    "name": "Reddit Account",
-    "owner": "Administrator",
-    "permissions": [
-     {
-      "create": 1,
-      "delete": 1,
-      "read": 1,
-      "role": "System Manager",
-      "write": 1
-     },
-     {
-      "create": 1,
-      "delete": 1,
-      "email": 1,
-      "export": 1,
-      "print": 1,
-      "read": 1,
-      "report": 1,
-      "role": "System Manager",
-      "share": 1,
-      "write": 1
-     }
-    ],
-    "row_format": "Dynamic",
-    "rows_threshold_for_grid_search": 20,
-    "sort_field": "modified",
-    "sort_order": "DESC",
-    "states": []
+  "actions": [],
+  "allow_import": 1,
+  "allow_rename": 1,
+  "title_field": "username",
+  "search_fields": "username",
+  "creation": "2025-12-01 10:27:06.215494",
+  "doctype": "DocType",
+  "engine": "InnoDB",
+  "field_order": [
+   "tab_overview",
+   "section_credentials",
+   "username",
+   "password",
+   "status",
+   "subreddit_group",
+   "column_break_1",
+   "account_version",
+   "is_posting_paused",
+   "tab_persona",
+   "section_persona",
+   "assistant_name",
+   "assistant_age",
+   "column_break_persona",
+   "assistant_profession",
+   "assistant_location",
+   "section_prompts",
+   "custom_prompt_instructions",
+   "account_description",
+   "posting_style",
+   "tab_rhythm",
+   "section_timing",
+   "rhythm_start_time",
+   "rhythm_end_time",
+   "column_break_rhythm",
+   "pusher_min_count",
+   "pusher_max_count",
+   "working_schedule",
+   "tab_system",
+   "section_system",
+   "airtable_id",
+   "last_activity",
+   "last_sync",
+   "column_break_system",
+   "active_post",
+   "posts_today_count"
+  ],
+  "fields": [
+   {
+    "fieldname": "tab_overview",
+    "fieldtype": "Tab Break",
+    "label": "Overview"
+   },
+   {
+    "fieldname": "section_credentials",
+    "fieldtype": "Section Break",
+    "label": "Credentials"
+   },
+   {
+    "fieldname": "username",
+    "fieldtype": "Data",
+    "in_list_view": 1,
+    "label": "Username",
+    "reqd": 0,
+    "unique": 1
+   },
+   {
+    "fieldname": "password",
+    "fieldtype": "Password",
+    "label": "Password"
+   },
+   {
+    "default": "Active",
+    "fieldname": "status",
+    "fieldtype": "Select",
+    "in_list_view": 1,
+    "in_standard_filter": 1,
+    "label": "Status",
+    "options": "Active\nInactive\nBlocked"
+   },
+   {
+    "fieldname": "subreddit_group",
+    "fieldtype": "Select",
+    "in_list_view": 1,
+    "label": "Subreddit Group",
+    "options": "East\nWest",
+    "reqd": 0
+   },
+   {
+    "fieldname": "column_break_1",
+    "fieldtype": "Column Break"
+   },
+   {
+    "fieldname": "account_version",
+    "fieldtype": "Data",
+    "label": "Account Version"
+   },
+   {
+    "default": "0",
+    "fieldname": "is_posting_paused",
+    "fieldtype": "Check",
+    "label": "Is Posting Paused"
+   },
+   {
+    "fieldname": "tab_persona",
+    "fieldtype": "Tab Break",
+    "label": "Persona (AI)"
+   },
+   {
+    "fieldname": "section_persona",
+    "fieldtype": "Section Break",
+    "label": "Character Details"
+   },
+   {
+    "fieldname": "assistant_name",
+    "fieldtype": "Data",
+    "label": "Assistant Name"
+   },
+   {
+    "fieldname": "assistant_age",
+    "fieldtype": "Int",
+    "label": "Assistant Age"
+   },
+   {
+    "fieldname": "column_break_persona",
+    "fieldtype": "Column Break"
+   },
+   {
+    "fieldname": "assistant_profession",
+    "fieldtype": "Data",
+    "label": "Hobby / Profession"
+   },
+   {
+    "fieldname": "assistant_location",
+    "fieldtype": "Data",
+    "label": "Location"
+   },
+   {
+    "fieldname": "section_prompts",
+    "fieldtype": "Section Break",
+    "label": "AI Instructions"
+   },
+   {
+    "description": "Specific rules for this account's tone of voice",
+    "fieldname": "custom_prompt_instructions",
+    "fieldtype": "Small Text",
+    "label": "Custom Prompt Instructions"
+   },
+   {
+    "description": "General description used for AI context generation",
+    "fieldname": "account_description",
+    "fieldtype": "Small Text",
+    "label": "Account Description"
+   },
+   {
+    "description": "Posting Style",
+    "fieldname": "posting_style",
+    "fieldtype": "Data",
+    "label": "Posting Style"
+   },
+   {
+    "fieldname": "tab_rhythm",
+    "fieldtype": "Tab Break",
+    "label": "Rhythm"
+   },
+   {
+    "fieldname": "section_timing",
+    "fieldtype": "Section Break",
+    "label": "Timing"
+   },
+   {
+    "fieldname": "rhythm_start_time",
+    "fieldtype": "Time",
+    "label": "Start Time"
+   },
+   {
+    "fieldname": "rhythm_end_time",
+    "fieldtype": "Time",
+    "label": "End Time"
+   },
+   {
+    "fieldname": "column_break_rhythm",
+    "fieldtype": "Column Break"
+   },
+   {
+    "fieldname": "pusher_min_count",
+    "fieldtype": "Int",
+    "label": "Min Posts / Cycle"
+   },
+   {
+    "fieldname": "pusher_max_count",
+    "fieldtype": "Int",
+    "label": "Max Posts / Cycle"
+   },
+   {
+    "fieldname": "working_schedule",
+    "fieldtype": "JSON",
+    "hidden": 1,
+    "label": "Working Schedule (Legacy)"
+   },
+   {
+    "fieldname": "tab_system",
+    "fieldtype": "Tab Break",
+    "label": "System"
+   },
+   {
+    "fieldname": "section_system",
+    "fieldtype": "Section Break"
+   },
+   {
+    "fieldname": "airtable_id",
+    "fieldtype": "Data",
+    "label": "Airtable ID",
+    "read_only": 0
+   },
+   {
+    "fieldname": "last_activity",
+    "fieldtype": "Datetime",
+    "label": "Last Activity",
+    "read_only": 0
+   },
+   {
+    "fieldname": "last_sync",
+    "fieldtype": "Datetime",
+    "label": "Last Sync",
+    "read_only": 0
+   },
+   {
+    "fieldname": "column_break_system",
+    "fieldtype": "Column Break"
+   },
+   {
+    "fieldname": "active_post",
+    "fieldtype": "Link",
+    "label": "Active Post",
+    "options": "Reddit Post",
+    "read_only": 0
+   },
+   {
+    "default": "0",
+    "fieldname": "posts_today_count",
+    "fieldtype": "Int",
+    "label": "Posts Today Count",
+    "read_only": 0
    }
+  ],
+  "grid_page_length": 50,
+  "index_web_pages_for_search": 1,
+  "links": [],
+  "modified": "2025-12-01 10:27:06.215494",
+  "modified_by": "Administrator",
+  "module": "Reddit-Postmachine",
+  "name": "Reddit Account",
+  "owner": "Administrator",
+  "permissions": [
+   {
+    "create": 1,
+    "delete": 1,
+    "email": 1,
+    "export": 1,
+    "import": 1,
+    "print": 1,
+    "read": 1,
+    "report": 1,
+    "role": "System Manager",
+    "share": 1,
+    "write": 1
+   },
+   {
+    "create": 1,
+    "delete": 1,
+    "email": 1,
+    "export": 1,
+    "import": 1,
+    "print": 1,
+    "read": 1,
+    "report": 1,
+    "role": "System Manager",
+    "share": 1,
+    "write": 1
+   }
+  ],
+  "row_format": "Dynamic",
+  "rows_threshold_for_grid_search": 20,
+  "sort_field": "modified",
+  "sort_order": "DESC",
+  "states": []
+ }

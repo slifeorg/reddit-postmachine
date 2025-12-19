@@ -1,4 +1,6 @@
-import { submitLogger } from "./logger.js";// Submit Content Script - Handles post submission functionality
+import { submitLogger } from "./logger.js"
+import { handleFlairSelection } from "./flair-handler.js"
+// Submit Content Script - Handles post submission functionality
 // Only runs on submit pages: *://reddit.com/*/submit*
 
 function injectBeforeUnloadBlocker() {
@@ -138,12 +140,94 @@ async function fillTitle(postData) {
         if (titleInput) {
           titleInput.focus()
           await sleep(500)
-          titleInput.value = postData.title
+          
+          // Get the title text and ensure it's a string, preserving all characters including brackets
+          const titleText = String(postData.title || '').trim()
+          
+          if (!titleText) {
+            submitLogger.log('Title is empty, skipping')
+            return false
+          }
+          
+          submitLogger.log('Setting title text:', titleText)
+          
+          // Clear any existing value first
+          titleInput.select()
+          titleInput.value = ''
           titleInput.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }))
+          await sleep(100)
+          
+          // Set cursor to start
+          titleInput.setSelectionRange(0, 0)
+          
+          // Insert text character by character to ensure Reddit's form recognizes all characters
+          // This is important for special characters like brackets [F4M]
+          for (let i = 0; i < titleText.length; i++) {
+            const char = titleText[i]
+            
+            // Get current cursor position
+            const cursorPos = titleInput.selectionStart || 0
+            
+            // Insert character at cursor position
+            const currentValue = titleInput.value || ''
+            const newValue = currentValue.slice(0, cursorPos) + char + currentValue.slice(cursorPos)
+            titleInput.value = newValue
+            
+            // Move cursor forward
+            titleInput.setSelectionRange(cursorPos + 1, cursorPos + 1)
+            
+            // Dispatch input event for each character to ensure Reddit recognizes it
+            titleInput.dispatchEvent(new InputEvent('input', {
+              inputType: 'insertText',
+              data: char,
+              bubbles: true,
+              cancelable: true
+            }))
+            
+            await sleep(5) // Small delay between characters
+          }
+          
+          // Ensure cursor is at the end
+          const finalLength = titleInput.value.length
+          titleInput.setSelectionRange(finalLength, finalLength)
+          
+          // Final events to ensure Reddit recognizes the complete change
+          titleInput.dispatchEvent(new InputEvent('input', {
+            inputType: 'insertText',
+            data: titleText,
+            bubbles: true,
+            cancelable: true
+          }))
           titleInput.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }))
-          submitLogger.log('Title field filled:', postData.title)
-          await sleep(1500)
-          return true
+          
+          // Verify the value was set correctly
+          await sleep(300)
+          const actualValue = titleInput.value || ''
+          submitLogger.log('Title field filled. Expected:', titleText, 'Actual:', actualValue)
+          
+          // Check if title matches (allowing for minor differences)
+          if (actualValue === titleText) {
+            submitLogger.log('Title verified successfully - exact match')
+            await sleep(1200)
+            return true
+          } else if (actualValue.trim() === titleText.trim()) {
+            submitLogger.log('Title verified successfully - match after trim')
+            await sleep(1200)
+            return true
+          } else {
+            submitLogger.warn('Title value mismatch. Expected:', titleText, 'Got:', actualValue)
+            // Try one more time with direct value assignment
+            titleInput.value = titleText
+            titleInput.dispatchEvent(new InputEvent('input', {
+              inputType: 'insertText',
+              data: titleText,
+              bubbles: true,
+              cancelable: true
+            }))
+            titleInput.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }))
+            await sleep(1000)
+            return true // Continue anyway
+          }
         }
       }
     }
@@ -902,8 +986,17 @@ async function runPostSubmissionScript(skipTabStateCheck = false) {
     await clickBodyField()
     await sleep(2000)
 
-    // === STEP 6: Clicking Post button ===
-    submitLogger.log('=== STEP 6: Clicking Post button ===')
+    // === STEP 6: Select flair if provided ===
+    submitLogger.log('=== STEP 6: Selecting flair ===')
+    if (postData.flair) {
+      await handleFlairSelection(postData)
+      await sleep(1000) // Give time for flair selection to complete
+    } else {
+      submitLogger.log('No flair specified in post data, skipping flair selection')
+    }
+
+    // === STEP 7: Clicking Post button ===
+    submitLogger.log('=== STEP 7: Clicking Post button ===')
     const submitSuccess = await submitPost()
 
     if (submitSuccess) {

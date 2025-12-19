@@ -57,11 +57,10 @@
   },
   {
    "default": "",
-   "description": "Location for posts. Use 'dynamic' to extract from subreddit name.",
+   "description": "Location for posts. Use 'dynamic' to extract from subreddit name. If empty, location will be taken from Reddit Account's assistant_location field.",
    "fieldname": "location",
-   "fieldtype": "Select",
-   "label": "Location",
-   "options": "dynamic"
+   "fieldtype": "Data",
+   "label": "Location"
   },
   {
    "default": "[r4r]",

@@ -276,7 +276,8 @@ sync_file_reliable() {
     local container_dir_path="$4"
     
     # Create directory structure in container
-    ssh "$REMOTE_SERVER" "docker exec '$CONTAINER_NAME' mkdir -p '$container_dir_path'" 2>/dev/null
+    # IMPORTANT: use `ssh -n` so it doesn't consume stdin from the outer `while read ... done <<< "$MODIFIED_FILES"` loops
+    ssh -n "$REMOTE_SERVER" "docker exec '$CONTAINER_NAME' mkdir -p '$container_dir_path'" 2>/dev/null
     if [ $? -ne 0 ]; then
         return 1
     fi
@@ -285,12 +286,12 @@ sync_file_reliable() {
     local temp_file="/tmp/sync_$(basename "$file")_$$"
     
     # Copy file to remote server first, then into container
-    if scp "$file" "$REMOTE_SERVER:$temp_file" 2>/dev/null; then
+    if scp -q "$file" "$REMOTE_SERVER:$temp_file" 2>/dev/null; then
         # Now copy from remote server into container
-        if ssh "$REMOTE_SERVER" "docker cp '$temp_file' '$CONTAINER_NAME:$container_file_path' && rm -f '$temp_file'" 2>/dev/null; then
+        if ssh -n "$REMOTE_SERVER" "docker cp '$temp_file' '$CONTAINER_NAME:$container_file_path' && rm -f '$temp_file'" 2>/dev/null; then
             # Verify file was synced correctly by checking size
             local local_size=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null || wc -c < "$file")
-            local remote_size=$(ssh "$REMOTE_SERVER" "docker exec '$CONTAINER_NAME' sh -c 'wc -c < \"$container_file_path\" 2>/dev/null || echo 0'" 2>/dev/null | tr -d ' ')
+            local remote_size=$(ssh -n "$REMOTE_SERVER" "docker exec '$CONTAINER_NAME' sh -c 'wc -c < \"$container_file_path\" 2>/dev/null || echo 0'" 2>/dev/null | tr -d ' ')
             
             if [ -n "$local_size" ] && [ -n "$remote_size" ] && [ "$local_size" = "$remote_size" ]; then
                 return 0
@@ -299,20 +300,21 @@ sync_file_reliable() {
                 return 0
             else
                 # Size mismatch, retry once
-                ssh "$REMOTE_SERVER" "rm -f '$temp_file'" 2>/dev/null
-                if scp "$file" "$REMOTE_SERVER:$temp_file" 2>/dev/null && \
-                   ssh "$REMOTE_SERVER" "docker cp '$temp_file' '$CONTAINER_NAME:$container_file_path' && rm -f '$temp_file'" 2>/dev/null; then
+                ssh -n "$REMOTE_SERVER" "rm -f '$temp_file'" 2>/dev/null
+                if scp -q "$file" "$REMOTE_SERVER:$temp_file" 2>/dev/null && \
+                   ssh -n "$REMOTE_SERVER" "docker cp '$temp_file' '$CONTAINER_NAME:$container_file_path' && rm -f '$temp_file'" 2>/dev/null; then
                     return 0
                 fi
                 return 1
             fi
         else
-            ssh "$REMOTE_SERVER" "rm -f '$temp_file'" 2>/dev/null
+            ssh -n "$REMOTE_SERVER" "rm -f '$temp_file'" 2>/dev/null
             return 1
         fi
     else
         # Fallback to direct pipe method if scp fails
-        if cat "$file" | ssh "$REMOTE_SERVER" "docker exec -i '$CONTAINER_NAME' sh -c 'cat > \"$container_file_path\"'" 2>/dev/null; then
+        # NOTE: this path intentionally uses stdin to send file content
+        if cat "$file" | ssh -n "$REMOTE_SERVER" "docker exec -i '$CONTAINER_NAME' sh -c 'cat > \"$container_file_path\"'" 2>/dev/null; then
             return 0
         fi
         return 1
