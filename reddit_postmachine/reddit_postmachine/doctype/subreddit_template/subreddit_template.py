@@ -18,7 +18,6 @@ def extract_location_from_subreddit(subreddit_name):
     
     # Прибираємо префікс r/ якщо є
     sub = subreddit_name.replace("r/", "").replace("R/", "").strip()
-    
     # Видаляємо суфікси типу r4r, personals тощо
     sub = re.sub(r'(r4r|personals|meetup|dating|hookup)$', '', sub, flags=re.IGNORECASE)
     sub = sub.strip()
