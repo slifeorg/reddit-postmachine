@@ -42,9 +42,42 @@ done
 REMOTE_SERVER="root@32016-51127.bacloud.info"
 CONTAINER_NAME="reddit-postmachine-backend-1"  # Using container name
 CONTAINER_BASE_PATH="/home/frappe/frappe-bench/apps/reddit_postmachine"
-LOCAL_POSTMACHINE_DIR="${LOCAL_POSTMACHINE_DIR:-..}"  # Use argument or default to ".."
-MINUTES_BACK="${MINUTES_BACK:-30}"  # Use argument or default to 30 minutes
 SITE_NAME="32016-51127.bacloud.info"  # Your site name
+
+# Auto-detect project root directory if not specified or if "." is provided
+if [ -z "$LOCAL_POSTMACHINE_DIR" ] || [ "$LOCAL_POSTMACHINE_DIR" = "." ]; then
+    # Get the directory where the script is located
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    CURRENT_DIR="$(pwd)"
+    
+    # Function to check if a directory is the project root
+    is_project_root() {
+        local dir="$1"
+        ([ -f "$dir/pyproject.toml" ] || [ -f "$dir/requirements.txt" ]) && [ -d "$dir/reddit_postmachine" ]
+    }
+    
+    # Try script directory first
+    if is_project_root "$SCRIPT_DIR"; then
+        LOCAL_POSTMACHINE_DIR="$SCRIPT_DIR"
+    # Try parent of script directory (if script is in scripts/)
+    elif is_project_root "$(dirname "$SCRIPT_DIR")"; then
+        LOCAL_POSTMACHINE_DIR="$(dirname "$SCRIPT_DIR")"
+    # Try current working directory
+    elif is_project_root "$CURRENT_DIR"; then
+        LOCAL_POSTMACHINE_DIR="$CURRENT_DIR"
+    # Try parent of current directory
+    elif is_project_root "$(dirname "$CURRENT_DIR")"; then
+        LOCAL_POSTMACHINE_DIR="$(dirname "$CURRENT_DIR")"
+    # Default to parent directory
+    else
+        LOCAL_POSTMACHINE_DIR=".."
+    fi
+else
+    # Use provided directory
+    LOCAL_POSTMACHINE_DIR="${LOCAL_POSTMACHINE_DIR}"
+fi
+
+MINUTES_BACK="${MINUTES_BACK:-30}"  # Use argument or default to 30 minutes
 
 # Colors for output
 RED='\033[0;31m'
@@ -60,7 +93,7 @@ FAILED_FILES=()
 SYNC_ERROR_COUNT=0
 
 # Normalize the local directory path to avoid path issues
-LOCAL_POSTMACHINE_DIR=$(realpath "$LOCAL_POSTMACHINE_DIR")
+LOCAL_POSTMACHINE_DIR=$(realpath "$LOCAL_POSTMACHINE_DIR" 2>/dev/null || echo "$LOCAL_POSTMACHINE_DIR")
 LOCAL_POSTMACHINE_DIR_WITH_SLASH="${LOCAL_POSTMACHINE_DIR}/"
 
 # Validate that the local directory exists
@@ -70,11 +103,20 @@ if [ ! -d "$LOCAL_POSTMACHINE_DIR" ]; then
     echo "Example: $0 ../reddit_postmachine 10"
     echo "Example: $0 ../reddit_postmachine --full"
     echo "Example: $0 --full --migrate"
-    echo "If no directory is provided, defaults to '..' (parent directory)"
+    echo "Example: $0 . 10  (auto-detects project root)"
+    echo "If no directory is provided or '.' is used, auto-detects project root"
     echo "If no minutes is provided, defaults to 30 minutes"
     echo "Use --full flag to sync all files (ignores time filter)"
     echo "Use --migrate flag to run bench migrate after sync"
     exit 1
+fi
+
+# Validate that this is actually the project root (has reddit_postmachine directory)
+if [ ! -d "$LOCAL_POSTMACHINE_DIR/reddit_postmachine" ]; then
+    echo -e "${YELLOW}⚠️  Warning: Directory '$LOCAL_POSTMACHINE_DIR' doesn't appear to be the project root${NC}"
+    echo -e "${YELLOW}   Expected to find: $LOCAL_POSTMACHINE_DIR/reddit_postmachine${NC}"
+    echo -e "${YELLOW}   Continuing anyway, but files may not sync correctly...${NC}"
+    echo ""
 fi
 
 # Validate minutes parameter (only if not doing full sync)
@@ -82,6 +124,7 @@ if [ "$FULL_SYNC" = false ] && (! [[ "$MINUTES_BACK" =~ ^[0-9]+$ ]] || [ "$MINUT
     echo -e "${RED}❌ Error: Minutes must be a positive integer!${NC}"
     echo "Usage: $0 [LOCAL_DIRECTORY] [MINUTES] [--full] [--migrate]"
     echo "Example: $0 ../reddit_postmachine 10"
+    echo "Example: $0 . 10  (auto-detects project root)"
     echo "Example: $0 --full"
     exit 1
 fi
@@ -102,6 +145,9 @@ else
 fi
 if [ "$RUN_MIGRATE" = true ]; then
     echo -e "${YELLOW}🚀 Will run bench migrate after sync${NC}"
+fi
+if [ "$HAS_DOCTYPE_CHANGES" = true ]; then
+    echo -e "${MAGENTA}🔄 Will restart backend container after migrations${NC}"
 fi
 echo ""
 
@@ -220,6 +266,59 @@ is_gitignored() {
     fi
 
     return 1
+}
+
+# Function to sync a single file reliably
+sync_file_reliable() {
+    local file="$1"
+    local relative_path="$2"
+    local container_file_path="$3"
+    local container_dir_path="$4"
+    
+    # Create directory structure in container
+    # IMPORTANT: use `ssh -n` so it doesn't consume stdin from the outer `while read ... done <<< "$MODIFIED_FILES"` loops
+    ssh -n "$REMOTE_SERVER" "docker exec '$CONTAINER_NAME' mkdir -p '$container_dir_path'" 2>/dev/null
+    if [ $? -ne 0 ]; then
+        return 1
+    fi
+    
+    # Use temporary file approach for reliable transfer
+    local temp_file="/tmp/sync_$(basename "$file")_$$"
+    
+    # Copy file to remote server first, then into container
+    if scp -q "$file" "$REMOTE_SERVER:$temp_file" 2>/dev/null; then
+        # Now copy from remote server into container
+        if ssh -n "$REMOTE_SERVER" "docker cp '$temp_file' '$CONTAINER_NAME:$container_file_path' && rm -f '$temp_file'" 2>/dev/null; then
+            # Verify file was synced correctly by checking size
+            local local_size=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null || wc -c < "$file")
+            local remote_size=$(ssh -n "$REMOTE_SERVER" "docker exec '$CONTAINER_NAME' sh -c 'wc -c < \"$container_file_path\" 2>/dev/null || echo 0'" 2>/dev/null | tr -d ' ')
+            
+            if [ -n "$local_size" ] && [ -n "$remote_size" ] && [ "$local_size" = "$remote_size" ]; then
+                return 0
+            elif [ -z "$local_size" ] || [ -z "$remote_size" ]; then
+                # If size check fails, assume success
+                return 0
+            else
+                # Size mismatch, retry once
+                ssh -n "$REMOTE_SERVER" "rm -f '$temp_file'" 2>/dev/null
+                if scp -q "$file" "$REMOTE_SERVER:$temp_file" 2>/dev/null && \
+                   ssh -n "$REMOTE_SERVER" "docker cp '$temp_file' '$CONTAINER_NAME:$container_file_path' && rm -f '$temp_file'" 2>/dev/null; then
+                    return 0
+                fi
+                return 1
+            fi
+        else
+            ssh -n "$REMOTE_SERVER" "rm -f '$temp_file'" 2>/dev/null
+            return 1
+        fi
+    else
+        # Fallback to direct pipe method if scp fails
+        # NOTE: this path intentionally uses stdin to send file content
+        if cat "$file" | ssh -n "$REMOTE_SERVER" "docker exec -i '$CONTAINER_NAME' sh -c 'cat > \"$container_file_path\"'" 2>/dev/null; then
+            return 0
+        fi
+        return 1
+    fi
 }
 
 # Find files based on sync mode
@@ -353,18 +452,12 @@ if [ "$HAS_CONFIG_CHANGES" = true ]; then
     echo -e "${YELLOW}Some config changes may require container restart.${NC}"
 fi
 
-# Ask about migrations if not specified and doctype changes detected
+# Automatically enable migrations if doctype changes detected
 if [ "$HAS_DOCTYPE_CHANGES" = true ] && [ "$RUN_MIGRATE" = false ]; then
     echo ""
     echo -e "${MAGENTA}📊 Doctype changes detected!${NC}"
-    read -p "Do you want to run bench migrate? (y/n): " -n 1 -r
-    echo ""
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        RUN_MIGRATE=true
-        echo -e "${GREEN}✅ Migrations will be executed after sync${NC}"
-    else
-        echo -e "${YELLOW}⚠️  Skipping migrations. Database schema may be outdated.${NC}"
-    fi
+    echo -e "${GREEN}✅ Migrations will be executed automatically after sync${NC}"
+    RUN_MIGRATE=true
 fi
 
 # Create base directory in container if it doesn't exist
@@ -388,18 +481,14 @@ while IFS= read -r file; do
 
         echo -e "${CYAN}[$CURRENT_FILE/$TOTAL_FILES] 📤 Syncing: $RELATIVE_PATH${NC}"
 
-        # Create directory structure in container
-        ssh "$REMOTE_SERVER" "docker exec '$CONTAINER_NAME' mkdir -p '$CONTAINER_DIR_PATH'" 2>/dev/null
-        if [ $? -ne 0 ]; then
-            echo -e "${RED}  ❌ Failed to create directory structure for $RELATIVE_PATH${NC}"
-            FAILED_FILES+=("$RELATIVE_PATH (directory creation failed)")
-            ((SYNC_ERROR_COUNT++))
-            continue
-        fi
-
-        # Copy file to container using SSH and docker cp
-        if cat "$file" | ssh "$REMOTE_SERVER" "docker exec -i '$CONTAINER_NAME' sh -c 'cat > \"$CONTAINER_FILE_PATH\"'" 2>/dev/null; then
-            echo -e "${GREEN}  ✅ Successfully synced${NC}"
+        # Sync file using reliable method
+        if sync_file_reliable "$file" "$RELATIVE_PATH" "$CONTAINER_FILE_PATH" "$CONTAINER_DIR_PATH"; then
+            LOCAL_SIZE=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null || wc -c < "$file")
+            if [ -n "$LOCAL_SIZE" ]; then
+                echo -e "${GREEN}  ✅ Successfully synced (${LOCAL_SIZE} bytes)${NC}"
+            else
+                echo -e "${GREEN}  ✅ Successfully synced${NC}"
+            fi
             ((SYNCED_COUNT++))
         else
             echo -e "${RED}  ❌ Failed to sync $RELATIVE_PATH${NC}"
@@ -466,6 +555,62 @@ if [ "$RUN_MIGRATE" = true ]; then
         echo -e "${GREEN}   ✅ Migrations completed${NC}"
     else
         echo -e "${RED}   ❌ Migration failed! Check logs for details${NC}"
+    fi
+fi
+
+# 3.5. Re-sync Python files after migrations (to ensure they're not overwritten)
+if [ "$HAS_PYTHON_CHANGES" = true ] && [ "$RUN_MIGRATE" = true ]; then
+    echo -e "${BLUE}3.5. Re-syncing Python files after migrations...${NC}"
+    PYTHON_FILES_COUNT=0
+    while IFS= read -r file; do
+        if [ -f "$file" ] && [[ "$file" == *.py ]]; then
+            RELATIVE_PATH=$(get_relative_path "$file")
+            CONTAINER_FILE_PATH="$CONTAINER_BASE_PATH/$RELATIVE_PATH"
+            CONTAINER_DIR_PATH=$(dirname "$CONTAINER_FILE_PATH")
+            
+            # Re-sync the file using reliable method
+            if sync_file_reliable "$file" "$RELATIVE_PATH" "$CONTAINER_FILE_PATH" "$CONTAINER_DIR_PATH"; then
+                ((PYTHON_FILES_COUNT++))
+            fi
+        fi
+    done <<< "$MODIFIED_FILES"
+    if [ $PYTHON_FILES_COUNT -gt 0 ]; then
+        echo -e "${GREEN}   ✅ Re-synced $PYTHON_FILES_COUNT Python file(s)${NC}"
+    fi
+fi
+
+# 3.6. Restart backend container if doctype changes detected (after migrations)
+if [ "$HAS_DOCTYPE_CHANGES" = true ]; then
+    echo -e "${BLUE}3.6. Restarting backend container...${NC}"
+    if ssh "$REMOTE_SERVER" "docker restart '$CONTAINER_NAME'" 2>/dev/null; then
+        echo -e "${GREEN}   ✅ Container $CONTAINER_NAME restarted${NC}"
+        sleep 3  # Give container time to start
+        
+        # Re-sync Python files after container restart to ensure they're not overwritten
+        if [ "$HAS_PYTHON_CHANGES" = true ]; then
+            echo -e "${BLUE}3.7. Re-syncing Python files after container restart...${NC}"
+            PYTHON_FILES_COUNT=0
+            while IFS= read -r file; do
+                if [ -f "$file" ] && [[ "$file" == *.py ]]; then
+                    RELATIVE_PATH=$(get_relative_path "$file")
+                    CONTAINER_FILE_PATH="$CONTAINER_BASE_PATH/$RELATIVE_PATH"
+                    CONTAINER_DIR_PATH=$(dirname "$CONTAINER_FILE_PATH")
+                    
+                    # Re-sync the file using reliable method
+                    if sync_file_reliable "$file" "$RELATIVE_PATH" "$CONTAINER_FILE_PATH" "$CONTAINER_DIR_PATH"; then
+                        echo -e "${GREEN}     ✅ Re-synced: $RELATIVE_PATH${NC}"
+                        ((PYTHON_FILES_COUNT++))
+                    else
+                        echo -e "${YELLOW}     ⚠️  Failed to re-sync: $RELATIVE_PATH${NC}"
+                    fi
+                fi
+            done <<< "$MODIFIED_FILES"
+            if [ $PYTHON_FILES_COUNT -gt 0 ]; then
+                echo -e "${GREEN}   ✅ Re-synced $PYTHON_FILES_COUNT Python file(s) after restart${NC}"
+            fi
+        fi
+    else
+        echo -e "${YELLOW}   ⚠️  Could not restart container $CONTAINER_NAME${NC}"
     fi
 fi
 

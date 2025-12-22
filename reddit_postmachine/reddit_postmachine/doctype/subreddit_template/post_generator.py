@@ -9,9 +9,18 @@ import frappe
 from frappe.utils import strip_html
 from openai import OpenAI
 
-from .location_utils import extract_location_from_subreddit
-from .safe_logging import log_error_safe, safe_log_append
-from .title_format import strip_outer_wrappers, sanitize_hashtag_token 
+from reddit_postmachine.reddit_postmachine.doctype.subreddit_template.location_utils import (
+    extract_location_from_subreddit,
+)
+from reddit_postmachine.reddit_postmachine.doctype.subreddit_template.safe_logging import (
+    log_error_safe,
+    safe_log_append,
+)
+from reddit_postmachine.reddit_postmachine.doctype.subreddit_template.title_format import (
+    sanitize_hashtag_token,
+    strip_outer_wrappers,
+    TitleFormatter,
+)
 
 
 class SubredditTemplatePostGenerator:
@@ -107,7 +116,7 @@ class SubredditTemplatePostGenerator:
             patterns_to_kill.append(re.escape(gender_tag))
             bare_tag = strip_outer_wrappers(gender_tag)
             if bare_tag:
-                 patterns_to_kill.append(re.escape(bare_tag))
+                patterns_to_kill.append(re.escape(bare_tag))
         
         patterns_to_kill.append(r"\[?[FfMm]4[FfMm]\]?")
         patterns_to_kill.append(r"\[?[Rr]4[Rr]\]?")
@@ -139,6 +148,218 @@ class SubredditTemplatePostGenerator:
         self._log(logs, f"FINAL CLEAN TEXT: '{current}'")
         return current
 
+    @staticmethod
+    def _truncate_title(title: str, *, max_len: int = 140) -> str:
+        """
+        Ensure title fits DocField max length (140).
+        Tries to cut on a word boundary and adds an ellipsis when truncating.
+        """
+        s = str(title or "").strip()
+        if max_len <= 0:
+            return ""
+        if len(s) <= max_len:
+            return s
+
+        ellipsis = "…"
+        hard_max = max_len - len(ellipsis)
+        if hard_max <= 0:
+            return s[:max_len]
+
+        cut = s[:hard_max].rstrip()
+        # Prefer last space boundary for nicer truncation
+        if " " in cut:
+            cut2 = cut.rsplit(" ", 1)[0].rstrip()
+            if len(cut2) >= max(10, int(hard_max * 0.6)):
+                cut = cut2
+        cut = cut.rstrip(" -–—:|,.;!?)\"]'")  # avoid ugly dangling punctuation
+        return (cut + ellipsis).strip()
+
+    @staticmethod
+    def _infer_title_style_from_examples(title_examples: list[str]) -> dict:
+        """
+        Infer whether titles usually include:
+        - a dash separator (e.g. " - ")
+        - a location token between gender tag and dash
+        - bracket/parentheses wrapper style for gender tag token
+
+        We keep this deliberately simple and default-safe.
+        """
+        style = {
+            "use_dash": False,
+            "include_location": False,
+            "gender_wrapper": "",  # "", "[]", "()"
+        }
+        for ex in title_examples or []:
+            s = str(ex or "").strip()
+            if not s:
+                continue
+
+            # Detect dash separator variant
+            if re.search(r"\s[-–—]\s", s):
+                style["use_dash"] = True
+                left = re.split(r"\s[-–—]\s", s, maxsplit=1)[0].strip()
+                toks = left.split()
+                if len(toks) >= 2:
+                    tag_tok = toks[1]
+                    if tag_tok.startswith("[") and tag_tok.endswith("]"):
+                        style["gender_wrapper"] = "[]"
+                    elif tag_tok.startswith("(") and tag_tok.endswith(")"):
+                        style["gender_wrapper"] = "()"
+                    # If there is anything after age+tag before dash, treat it as location.
+                    if len(toks) >= 3:
+                        style["include_location"] = True
+                break
+
+            # No dash: still infer wrapper if present
+            toks = s.split()
+            if len(toks) >= 2:
+                tag_tok = toks[1]
+                if tag_tok.startswith("[") and tag_tok.endswith("]"):
+                    style["gender_wrapper"] = "[]"
+                elif tag_tok.startswith("(") and tag_tok.endswith(")"):
+                    style["gender_wrapper"] = "()"
+
+        return style
+
+    @staticmethod
+    def _extract_location_and_gender_from_title_examples(title_examples: list[str]) -> dict:
+        """
+        Best-effort extraction of gender tag + location from `Subreddit Template.title_example`.
+
+        Example supported:
+          "25 [F4M] Orlando - Looking for a little chemistry and good company"
+          "25 F4M Orlando - ..."
+          "25 (F4M) New Haven - ..."
+
+        Returns:
+          {"gender_tag": "[F4M]", "location": "Orlando"}  (values may be None)
+        """
+        out = {"gender_tag": None, "location": None}
+        for ex in title_examples or []:
+            s = str(ex or "").strip()
+            if not s:
+                continue
+
+            # Prefer the dash format: "<age> <tag> <location> - <title>"
+            m = re.match(r"^\s*\d{1,2}\s+(\[[^\]]+\]|\([^)]+\)|\S+)\s+(.+?)\s*[-–—]\s+.+$", s)
+            if m:
+                tag = m.group(1).strip()
+                loc = m.group(2).strip()
+                # Normalize placeholder-ish values
+                if loc.lower() in {"dynamic", "dynamics"}:
+                    loc = ""
+                out["gender_tag"] = tag or None
+                out["location"] = loc or None
+                return out
+
+            # Fallback: try "<age> <tag> <rest...>"
+            m2 = re.match(r"^\s*\d{1,2}\s+(\[[^\]]+\]|\([^)]+\)|\S+)\s+(.+)$", s)
+            if m2 and not out["gender_tag"]:
+                out["gender_tag"] = m2.group(1).strip() or None
+
+        return out
+
+    @staticmethod
+    def _normalize_gender_tag(tag: str | None) -> str | None:
+        """
+        Normalize and validate a gender tag.
+
+        We accept tags like:
+          F4M, M4F, F4F, M4M, R4R (and similar), with optional [] or () wrappers.
+
+        We explicitly reject "r4r" / "[r4r]" coming from subreddit naming noise,
+        because it is not a gender tag in our title format rules.
+        """
+        if not tag:
+            return None
+        s = str(tag).strip()
+        if not s:
+            return None
+
+        bare = strip_outer_wrappers(s).strip()
+        if not bare:
+            return None
+
+        bare_u = bare.upper()
+
+        # Reject subreddit-noise tokens
+        if bare_u == "R4R" or bare_u.endswith("R4R") or "R4R" == bare_u:
+            # If you truly want R4R as a gender tag later, remove this guard.
+            return None
+
+        # Accept typical patterns like F4M / M4F / NB4M etc.
+        if not re.match(r"^[A-Z]{1,3}4[A-Z]{1,3}$", bare_u):
+            return None
+
+        # Preserve wrapper style from input if present, default to bare
+        if s.startswith("[") and s.endswith("]"):
+            return f"[{bare_u}]"
+        if s.startswith("(") and s.endswith(")"):
+            return f"({bare_u})"
+        return bare_u
+
+    @staticmethod
+    def _apply_gender_wrapper(bare_gender_tag: str, wrapper: str) -> str:
+        t = str(bare_gender_tag or "").strip()
+        if not t:
+            return ""
+        if wrapper == "[]":
+            return f"[{t}]"
+        if wrapper == "()":
+            return f"({t})"
+        return t
+
+    @staticmethod
+    def _strip_leading_redundant_prefixes(
+        text: str,
+        *,
+        age: str,
+        raw_gender_tag: str,
+        bare_gender_tag: str,
+        location: str,
+        location_hashtag: str,
+    ) -> str:
+        """
+        Remove leaked metadata prefixes from the START only, repeatedly, e.g.:
+          "F4M 25 F4M Let's ..." -> "Let's ..."
+        """
+        s = str(text or "").strip()
+        patterns: list[str] = []
+
+        # Age patterns (specific age and generic 1-2 digits)
+        if age:
+            patterns.append(re.escape(str(age).strip()))
+        patterns.append(r"\d{1,2}")
+
+        # Gender tag variants
+        for g in {str(raw_gender_tag or "").strip(), str(bare_gender_tag or "").strip()}:
+            if not g:
+                continue
+            patterns.append(re.escape(g))
+            patterns.append(re.escape(f"[{g}]"))
+            patterns.append(re.escape(f"({g})"))
+
+        # Common tag shapes
+        patterns.append(r"\[?[FfMm]4[FfMm]\]?")
+        patterns.append(r"\[?[Rr]4[Rr]\]?")
+
+        # Location variants
+        loc = str(location or "").strip()
+        if loc:
+            patterns.append(re.escape(loc))
+        if location_hashtag:
+            patterns.append(r"#?" + re.escape(location_hashtag))
+
+        for _ in range(15):
+            prev = s
+            s = re.sub(r"^[\s\-\|:—–,]+", "", s)
+            for p in patterns:
+                s = re.sub(rf"^\s*{p}\b", "", s, flags=re.IGNORECASE)
+            s = re.sub(r"^[\s\-\|:—–,]+", "", s).strip()
+            if s == prev:
+                break
+        return s
+
 
     # --- Main Logic ---
 
@@ -153,6 +374,9 @@ class SubredditTemplatePostGenerator:
             if not frappe.db.exists("Subreddit Template", template_name):
                 frappe.throw(f"Template '{template_name}' not found")
             template = frappe.get_doc("Subreddit Template", template_name)
+
+            title_examples = [x.strip() for x in (getattr(template, "title_example", "") or "").splitlines() if x.strip()]
+            example_meta = self._extract_location_and_gender_from_title_examples(title_examples)
             
             key_doc = frappe.db.get_value("Keys", {}, "name")
             if not key_doc: frappe.throw("No 'Keys' doc found.")
@@ -170,13 +394,15 @@ class SubredditTemplatePostGenerator:
             # 3. Persona
             agent_display_name = agent_name or account_doc.assistant_name or account_doc.username or "Unknown"
             
-            raw_loc = str(template.location or "").strip()
+            raw_loc = str(getattr(template, "location", "") or "").strip()
             if raw_loc.lower() == "dynamic":
-                agent_location = extract_location_from_subreddit(template.sub, location=None)
+                # Prefer location explicitly shown in examples; fallback to subreddit-derived location.
+                agent_location = example_meta.get("location") or extract_location_from_subreddit(template.sub, location=None)
             elif raw_loc:
                 agent_location = raw_loc
             else:
-                agent_location = account_doc.assistant_location
+                # If template doesn't have a location field, infer it from the examples.
+                agent_location = example_meta.get("location") or account_doc.assistant_location
 
             defaults = self._derive_persona_defaults(
                 account_username=account_doc.username,
@@ -191,8 +417,15 @@ class SubredditTemplatePostGenerator:
             self._log(logs, f"Persona: {final_age} / {final_location}")
 
             # 4. Format Setup
-            raw_gender_tag = template.gender_tag or "[F4M]"
-            location_hashtag = sanitize_hashtag_token(final_location)  # наприклад "#Orlando"
+            # IMPORTANT: prefer gender tag from the template examples (this is the user's source of truth),
+            # and ignore invalid/noisy tokens like "[r4r]".
+            example_gender = self._normalize_gender_tag(example_meta.get("gender_tag"))
+            template_gender = self._normalize_gender_tag(getattr(template, "gender_tag", None))
+            raw_gender_tag = example_gender or template_gender or "[F4M]"
+            location_hashtag = sanitize_hashtag_token(final_location)  # наприклад "Orlando" (без #)
+            bare_gender_tag = strip_outer_wrappers(raw_gender_tag)  # "F4M"
+            inferred_style = self._infer_title_style_from_examples(title_examples)
+            rendered_gender_tag = self._apply_gender_wrapper(bare_gender_tag, inferred_style["gender_wrapper"])
 
             # 5. Prompt Construction
             json_schema = {
@@ -215,7 +448,6 @@ class SubredditTemplatePostGenerator:
                 },
             }
 
-            title_examples = [x.strip() for x in (template.title_example or "").splitlines() if x.strip()]
             example_block = ""
             for ex in title_examples[:3]:
                 parts = re.split(r"[-–—]\s", ex, maxsplit=1)
@@ -237,6 +469,10 @@ class SubredditTemplatePostGenerator:
             
             BAD OUTPUT: "{final_age} {raw_gender_tag} {final_location} - Let's hang out"
             GOOD OUTPUT: "Let's hang out"
+
+            HARD LIMIT:
+            'headline_text' MUST be short enough that the final Reddit title fits within 140 characters.
+            Keep 'headline_text' concise (typically under ~80 characters).
             
             {example_block}
             """
@@ -272,25 +508,67 @@ class SubredditTemplatePostGenerator:
 
                 raw_headline = data.get("headline_text", "")
                 
-                # --- APPLY SCORCHED EARTH CLEANING ---
+                # 1) Extract the "title text" portion if the model leaked metadata like:
+                #    "25 Orlando - Looking for ..." -> "Looking for ..."
+                extract_fn = getattr(TitleFormatter, "extract_title_text_from_ai_title", None)
+                if callable(extract_fn):
+                    extracted_title_text = extract_fn(
+                        raw_headline,
+                        final_age=final_age,
+                        rendered_gender_tag=bare_gender_tag,
+                        location_hashtag=location_hashtag,
+                        final_location=final_location,
+                        wants_age=True,
+                        wants_location=True,
+                    )
+                else:
+                    # Backward-compatible fallback: rely on the hardening cleaners below.
+                    extracted_title_text = raw_headline
+
+                # 1.1) Extra hardening: remove repeated leaked prefixes (age/tag/location) from the start.
+                extracted_title_text = self._strip_leading_redundant_prefixes(
+                    extracted_title_text,
+                    age=final_age,
+                    raw_gender_tag=raw_gender_tag,
+                    bare_gender_tag=bare_gender_tag,
+                    location=final_location,
+                    location_hashtag=location_hashtag,
+                )
+
+                # 2) Final safety pass: strip any remaining leaked prefix tokens from the start only.
                 clean_headline = self._clean_ai_headline(
-                    text=raw_headline,
+                    text=extracted_title_text,
                     age=final_age,
                     gender_tag=raw_gender_tag,
                     location=final_location,
-                    logs=logs
+                    logs=logs,
                 )
+                clean_headline = re.sub(r"^\s*[-–—]\s*", "", clean_headline).strip()
                 
-                # --- НОВЕ ФОРМУВАННЯ TITLE ЧЕРЕЗ F-STRING ---
-                title_parts = [final_age, raw_gender_tag]
-                title_parts.append(clean_headline.strip())
+                # --- Assemble final title in the expected format ---
+                # Format is inferred from `title_example`:
+                # - default (no dash): "26 F4M Let's ..."
+                # - dash + location:   "26 [F4M] Orlando - Let's ..."
+                include_location = bool(inferred_style.get("include_location"))
+                use_dash = bool(inferred_style.get("use_dash"))
 
-                final_title = " ".join([part for part in title_parts if part and part != "-"]).strip()
+                prefix_parts = [final_age, rendered_gender_tag]
+                if include_location and final_location:
+                    prefix_parts.append(final_location)
+                prefix = " ".join([p for p in prefix_parts if p]).strip()
 
-                # Додаткова чистка: прибрати подвійний дефіс або зайві пробіли
-                final_title = re.sub(r'\s*-\s*$', '', final_title)  # якщо headline порожній
-                final_title = re.sub(r'\s+-', ' - ', final_title)
-                final_title = re.sub(r'\s{2,}', ' ', final_title).strip()
+                if clean_headline:
+                    if use_dash:
+                        final_title = f"{prefix} - {clean_headline}" if prefix else clean_headline
+                    else:
+                        final_title = f"{prefix} {clean_headline}".strip() if prefix else clean_headline
+                else:
+                    final_title = prefix
+
+                # Extra normalization
+                final_title = re.sub(r"\s{2,}", " ", final_title).strip()
+                final_title = re.sub(r"\s+-\s+", " - ", final_title).strip()
+                final_title = self._truncate_title(final_title, max_len=140)
 
                 self._log(logs, f"Assembled: '{final_title}'")
                 
@@ -307,15 +585,17 @@ class SubredditTemplatePostGenerator:
                 frappe.throw("Failed to generate unique post.")
 
             # 7. Create Document
-            flair = None
-            if raw_gender_tag and "[" in raw_gender_tag:
-                 flair = strip_outer_wrappers(raw_gender_tag)
+            # Prefer using the validated, rendered gender tag for flair (e.g. "[F4M]"),
+            # never noisy tokens like "[r4r]".
+            flair = rendered_gender_tag or None
             
-            if template.available_flairs:
-                f_list = [x.strip() for x in template.available_flairs.splitlines() if x.strip()]
+            available_flairs = getattr(template, "available_flairs", None)
+            if available_flairs:
+                f_list = [x.strip() for x in str(available_flairs).splitlines() if x.strip()]
                 if f_list: flair = f_list[0]
-            if template.section_flair:
-                flair = template.section_flair
+            section_flair = getattr(template, "section_flair", None)
+            if section_flair:
+                flair = section_flair
 
             tags = chosen_res.get("hashtags", "")
             if flair and flair not in tags:
@@ -367,3 +647,30 @@ class SubredditTemplatePostGenerator:
         except Exception as e:
             log_error_safe("generate_post_for_agent", logs, e)
             raise
+
+
+# ----------------------------
+# Whitelisted module wrappers
+# ----------------------------
+@frappe.whitelist()
+def generate_post_from_template(
+    template_name: str,
+    account_name: str | None = None,
+    agent_name: str | None = None,
+    account_info: str | None = None,  # kept for backward-compat; ignored
+):
+    """
+    Public Frappe endpoint that delegates to `SubredditTemplatePostGenerator`.
+    This makes `post_generator.py` callable from the client/API.
+    """
+    return SubredditTemplatePostGenerator().generate_post_from_template(
+        template_name, account_name=account_name, agent_name=agent_name
+    )
+
+
+@frappe.whitelist()
+def generate_post_for_agent(agent_name: str):
+    """
+    Public Frappe endpoint that delegates to `SubredditTemplatePostGenerator`.
+    """
+    return SubredditTemplatePostGenerator().generate_post_for_agent(agent_name)

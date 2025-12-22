@@ -5,6 +5,9 @@ import json
 import re
 from openai import OpenAI
 
+# Route legacy whitelisted endpoints to the v2 generator implementation.
+from reddit_postmachine.reddit_postmachine.doctype.subreddit_template import post_generator as post_generator_v2
+
 class SubredditTemplate(Document):
     pass
 
@@ -91,6 +94,13 @@ def generate_post_from_template(template_name, account_name=None, agent_name=Non
     """
     Генерує та створює новий документ Reddit Post (викликається з кнопки на шаблоні або через API)
     """
+    # Delegate to v2 generator (keeps backward-compatible signature).
+    return post_generator_v2.generate_post_from_template(
+        template_name=template_name,
+        account_name=account_name,
+        agent_name=agent_name,
+        account_info=account_info,
+    )
     # Ініціалізуємо logs як список
     logs = []
     
@@ -731,6 +741,8 @@ def generate_post_for_agent(agent_name):
     """
     API-метод: повертає новий Reddit Post для вказаного агента.
     """
+    # Delegate to v2 generator.
+    return post_generator_v2.generate_post_for_agent(agent_name=agent_name)
     logs = []
     
     if not agent_name:
