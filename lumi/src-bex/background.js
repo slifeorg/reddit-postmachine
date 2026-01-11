@@ -252,7 +252,7 @@ export default bexBackground((bridge) => {
 					bgLogger.log(`[BG] ⏰ WATCHDOG: Monitoring expired for ${state.userName} on tab ${tabId}. Triggering immediate deletion and cleanup...`)
 
 					// PROACTIVE: Force clean slate for next check
-					await chrome.storage.local.remove(['latestPostsData'])
+					await chrome.storage.local.remove(['latestPostsData', 'lastDecisionReport'])
 					await AutoFlowStateManager.clearState(state.userName)
 					delete tabStates[tabIdStr] // Clear RAM state
 
