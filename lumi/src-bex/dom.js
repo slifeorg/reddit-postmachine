@@ -9,18 +9,30 @@ import { domLogger } from './logger.js'
 domLogger.log('Reddit Post Machine DOM script loaded');
 
 // Patch beforeunload to prevent "Leave site?" alerts
-;(() => {
+; (() => {
 	try {
 		const originalAdd = window.addEventListener
 		window.addEventListener = function (type, listener, options) {
 			if (type === 'beforeunload') return
-			return originalAdd.call(this, type, listener, options)
+			return originalAdd.apply(this, arguments)
 		}
+
 		window.onbeforeunload = null
-		window.addEventListener('beforeunload', (e) => {
+		try {
+			Object.defineProperty(window, 'onbeforeunload', {
+				get: () => null,
+				set: () => { },
+				configurable: false
+			})
+		} catch (e) { }
+
+		originalAdd.call(window, 'beforeunload', (e) => {
 			e.stopImmediatePropagation()
+			e.stopPropagation()
+			delete e.returnValue
+			return undefined
 		}, true)
-	} catch (e) {}
+	} catch (e) { }
 })()
 
 const RedditDOMHelper = {
@@ -125,12 +137,12 @@ const RedditDOMHelper = {
 		const uniqueIds = new Set();
 
 		// Retry loop to wait for posts
-		for(let i=0; i<5; i++) {
+		for (let i = 0; i < 5; i++) {
 			const found = this.collectAllPostsRecursive(document);
-			if(found.length > 0) {
+			if (found.length > 0) {
 				// Deduplicate
 				found.forEach(p => {
-					if(!uniqueIds.has(p.id)) {
+					if (!uniqueIds.has(p.id)) {
 						uniqueIds.add(p.id);
 						rawPosts.push(p);
 					}
@@ -297,13 +309,13 @@ const RedditDOMHelper = {
 		// 1. Select Subreddit (if on general submit page)
 		if (subreddit_name && !window.location.href.includes('/r/')) {
 			const subInput = this.deepQuery('input[placeholder*="community"]');
-			if(subInput) {
+			if (subInput) {
 				subInput.value = subreddit_name;
-				subInput.dispatchEvent(new Event('input', {bubbles:true}));
+				subInput.dispatchEvent(new Event('input', { bubbles: true }));
 				await this.sleep(1000);
 				// Click first result
 				const firstOpt = this.deepQuery('[role="option"]');
-				if(firstOpt) firstOpt.click();
+				if (firstOpt) firstOpt.click();
 			}
 		}
 
@@ -325,18 +337,18 @@ const RedditDOMHelper = {
 
 	async clickTab(val) {
 		const t = this.deepQuery(`[data-select-value="${val}"]`);
-		if(t) { t.click(); await this.sleep(500); return true; }
+		if (t) { t.click(); await this.sleep(500); return true; }
 		return false;
 	},
 
 	async fillTitle(val) {
 		const el = this.deepQuery('faceplate-textarea-input[name="title"]');
-		if(el?.shadowRoot) {
+		if (el?.shadowRoot) {
 			const i = el.shadowRoot.querySelector('textarea');
-			if(i) {
+			if (i) {
 				i.focus();
 				i.value = val;
-				i.dispatchEvent(new Event('input', {bubbles:true}));
+				i.dispatchEvent(new Event('input', { bubbles: true }));
 				return true;
 			}
 		}
@@ -345,12 +357,12 @@ const RedditDOMHelper = {
 
 	async fillUrl(val) {
 		const el = this.deepQuery('faceplate-textarea-input[name="link"]');
-		if(el?.shadowRoot) {
+		if (el?.shadowRoot) {
 			const i = el.shadowRoot.querySelector('textarea');
-			if(i) {
+			if (i) {
 				i.focus();
 				i.value = val;
-				i.dispatchEvent(new Event('input', {bubbles:true}));
+				i.dispatchEvent(new Event('input', { bubbles: true }));
 				return true;
 			}
 		}
@@ -359,22 +371,22 @@ const RedditDOMHelper = {
 
 	async clickBodyField() {
 		const el = this.deepQuery('shreddit-composer');
-		if(el) {
+		if (el) {
 			const div = el.querySelector('div[contenteditable]');
-			if(div) { div.focus(); return true; }
+			if (div) { div.focus(); return true; }
 		}
 		return false;
 	},
 
 	async fillBodyText(val) {
 		const el = this.deepQuery('shreddit-composer');
-		if(el) {
+		if (el) {
 			const div = el.querySelector('div[contenteditable]');
-			if(div) {
+			if (div) {
 				div.focus();
 				div.innerHTML = "<p><br></p>";
-				if(document.execCommand) document.execCommand("insertText", false, val);
-				div.dispatchEvent(new Event('input', {bubbles:true}));
+				if (document.execCommand) document.execCommand("insertText", false, val);
+				div.dispatchEvent(new Event('input', { bubbles: true }));
 				return true;
 			}
 		}

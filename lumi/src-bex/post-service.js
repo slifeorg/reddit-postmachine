@@ -204,11 +204,47 @@ export class PostDataService {
 
 		// Analyze posts to determine if new post is needed
 		if (!postsData || !postsData.postsInfo || postsToAnalyze.length === 0) {
-			postServiceLogger.log('[PostDataService] ❌ DECISION: No posts found (after filtering deleted post), should create new post')
-			decisionReport.decision = 'create'
-			decisionReport.reason = 'no_posts'
-			this.saveDecisionReport(decisionReport)
-			return { shouldCreate: true, reason: 'no_posts', decisionReport }
+			postServiceLogger.log('[PostDataService] 🔍 No posts found in DOM. Verifying with Frappe API before decision...');
+
+			// Fallback: Check Frappe API to see if a post was recently created
+			try {
+				const frappePost = await this.getLatestPostFromFrappe(userName);
+				if (frappePost && frappePost.timestamp) {
+					const now = Date.now();
+					const ageMinutes = (now - frappePost.timestamp) / (1000 * 60);
+
+					if (ageMinutes < MONITORING_WINDOW_MINUTES) {
+						postServiceLogger.log(`[PostDataService] ⏳ API VERIFIED: Found recent post in Frappe (${ageMinutes.toFixed(1)}m old). Restoring monitoring state.`);
+
+						const monitoringEndTime = frappePost.timestamp + (MONITORING_WINDOW_MINUTES * 60 * 1000);
+						const timeLeftMinutes = Math.ceil(MONITORING_WINDOW_MINUTES - ageMinutes);
+
+						decisionReport.decision = 'wait';
+						decisionReport.reason = 'monitoring (API verified)';
+						decisionReport.lastPostStatus = frappePost.status === 'Posted' ? 'active' : 'unknown';
+						decisionReport.monitoringEndTime = monitoringEndTime;
+						decisionReport.timeLeftMinutes = timeLeftMinutes;
+						decisionReport.lastPost = {
+							id: frappePost.reddit_post_id || frappePost.name,
+							title: frappePost.title,
+							url: frappePost.reddit_post_url,
+							timestamp: frappePost.posted_at,
+							status: frappePost.status
+						};
+
+						this.saveDecisionReport(decisionReport);
+						return { shouldCreate: false, reason: 'monitoring_new_post', lastPost: decisionReport.lastPost, decisionReport };
+					}
+				}
+			} catch (apiError) {
+				postServiceLogger.error('[PostDataService] Frappe API verification failed:', apiError);
+			}
+
+			postServiceLogger.log('[PostDataService] ❌ DECISION: No posts found (after API verification), should create new post');
+			decisionReport.decision = 'create';
+			decisionReport.reason = 'no_posts';
+			this.saveDecisionReport(decisionReport);
+			return { shouldCreate: true, reason: 'no_posts', decisionReport };
 		}
 
 		const lastPost = postsToAnalyze[0] // Most recent post after filtering
@@ -357,6 +393,17 @@ export class PostDataService {
 	// Save execution result to storage for popup visibility
 	static async saveExecutionResult(executionResult) {
 		try {
+			// STICKY UI: If we are currently monitoring, don't allow 'skipped' to overwrite it
+			// unless the monitoring has actually expired.
+			if (executionResult.status === 'skipped') {
+				const current = await chrome.storage.local.get(['lastExecutionResult']);
+				const lastExec = current.lastExecutionResult;
+				if (lastExec && lastExec.status === 'monitoring' && lastExec.monitoringEndTime > Date.now()) {
+					postServiceLogger.log('[PostDataService] 🛡️ Ignored "skipped" execution result to preserve active monitoring timer');
+					return;
+				}
+			}
+
 			await chrome.storage.local.set({
 				lastExecutionResult: executionResult,
 				lastExecutionTimestamp: executionResult.timestamp
@@ -364,6 +411,81 @@ export class PostDataService {
 			postServiceLogger.log('[PostDataService] 💾 Execution result saved to storage:', executionResult.status, '-', executionResult.postResult)
 		} catch (error) {
 			postServiceLogger.error('[PostDataService] Failed to save execution result:', error)
+		}
+	}
+
+	// Persistent monitoring storage for background watchdog
+	static async saveActiveMonitoring(userName, monitoringEndTime, postTimestamp) {
+		try {
+			const monitoringInfo = {
+				userName,
+				monitoringEndTime,
+				postTimestamp,
+				updatedAt: Date.now()
+			};
+			await chrome.storage.local.set({ [`monitoring_${userName}`]: monitoringInfo });
+			postServiceLogger.log(`[PostDataService] 💾 Persistent monitoring saved for ${userName} until ${new Date(monitoringEndTime).toLocaleTimeString()}`);
+		} catch (error) {
+			postServiceLogger.error('[PostDataService] Failed to save active monitoring:', error);
+		}
+	}
+
+	static async getActiveMonitoring(userName) {
+		try {
+			const key = `monitoring_${userName}`;
+			const result = await chrome.storage.local.get([key]);
+			return result[key] || null;
+		} catch (error) {
+			return null;
+		}
+	}
+
+	static async clearActiveMonitoring(userName) {
+		try {
+			await chrome.storage.local.remove([`monitoring_${userName}`]);
+			postServiceLogger.log(`[PostDataService] 🗑️ Persistent monitoring cleared for ${userName}`);
+		} catch (error) { }
+	}
+
+	static async getLatestPostFromFrappe(agentName) {
+		try {
+			const cleanAgentName = agentName.replace(/^u\//, '')
+			const storageResult = await chrome.storage.sync.get(['apiConfig'])
+			const apiConfig = storageResult.apiConfig || {
+				token: '8fbbf0a7c626e18:2c3693fb52ac66f'
+			}
+
+			// We use subreddit_agent or similar. Since we aren't 100% sure of the field name,
+			// we will try to fetch with a generic filter if possible, or just skip if it fails.
+			// Let's assume the field is subreddit_agent as it's common in this project's Frappe schema.
+			const filterEndpoint = `https://32016-51127.bacloud.info/api/resource/Reddit%20Post?filters=[["subreddit_agent","=","${encodeURIComponent(cleanAgentName)}"]]&order_by=posted_at desc&limit_page_length=1&fields=["name","posted_at","status","reddit_post_id","reddit_post_url","title","score","comments"]`
+
+			const response = await fetch(filterEndpoint, {
+				method: 'GET',
+				headers: {
+					'Content-Type': 'application/json',
+					Authorization: `token ${apiConfig.token}`
+				}
+			})
+
+			if (!response.ok) {
+				throw new Error(`Frappe API request failed: ${response.status}`)
+			}
+
+			const data = await response.json()
+			if (data.data && data.data.length > 0) {
+				const post = data.data[0]
+				if (post.posted_at) {
+					// Add UTC to ensure it's parsed as UTC if Frappe sends it that way
+					const postedDate = new Date(post.posted_at + (post.posted_at.includes('Z') ? '' : ' UTC'))
+					post.timestamp = postedDate.getTime()
+				}
+				return post
+			}
+			return null
+		} catch (error) {
+			postServiceLogger.error('[PostDataService] Failed to get latest post from Frappe:', error)
+			return null
 		}
 	}
 

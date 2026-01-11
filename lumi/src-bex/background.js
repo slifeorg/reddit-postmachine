@@ -48,10 +48,12 @@ import {
 	tabStates,
 	processedTabs,
 	CHECK_INTERVAL,
+	STALL_TIMEOUT_MS,
 	getStallWatchdogIntervalId,
 	setStallWatchdogIntervalId,
 	touchTabState
 } from './state-manager.js'
+import { PostDataService } from './post-service.js'
 
 // ===== ENTRY POINT =====
 
@@ -59,7 +61,7 @@ import {
 async function restartAutoFlowFromBeginning(userName) {
 	if (!userName) return
 	await AutoFlowStateManager.clearState(userName)
-	handleCheckUserStatus(userName, () => {})
+	handleCheckUserStatus(userName, () => { })
 }
 
 // Handle messages from content scripts and popup
@@ -117,6 +119,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 			break
 
 		case 'ACTION_COMPLETED':
+			// HOOK: Intercept DELETE_POST_COMPLETED for auto-flow orchestration
+			if (message.action === 'DELETE_POST_COMPLETED') {
+				const state = tabStates[senderTabId]
+				// If it was an auto-flow deletion attempt, always restart regardless of "success"
+				if (state && (state.deletingBeforeCreating || state.targetAction === 'delete_and_create')) {
+					bgLogger.log('[BG] 🔄 Auto-flow deletion signal received in background.js. Triggering restart...')
+					const userName = state.userName || message.data?.userName
+					handleActionCompleted(senderTabId, message.action, message.success, message.data)
+					// Note: handleActionCompleted will still run, but we can ensure a restart here if it doesn't
+					// However, moving the restart logic here makes it "clear execution at background level"
+					sendResponse({ received: true, handled: 'background_interception' })
+					return true
+				}
+			}
 			handleActionCompleted(senderTabId, message.action, message.success, message.data)
 			sendResponse({ received: true })
 			return true
@@ -183,29 +199,82 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 	delete tabStates[tabId]
 	processedTabs.delete(tabId)
 	// Handle extension tab closure
-	handleTabClosed(tabId).catch(() => {})
+	handleTabClosed(tabId).catch(() => { })
 })
 
 // Export default function for Quasar bridge compatibility
 export default bexBackground((bridge) => {
 	bgLogger.log('Background script bridge initialized', bridge)
 
-	chrome.storage.local.remove(['autoFlowState_unknown']).catch(() => {})
+	chrome.storage.local.remove(['autoFlowState_unknown']).catch(() => { })
 
-	// Setup stall watchdog to detect and recover from stuck automation states
-	const STALL_TIMEOUT_MS = 5 * 60 * 1000
-	setStallWatchdogIntervalId(setInterval(() => {
+	// Setup stall watchdog and monitoring timer checker
+	setStallWatchdogIntervalId(setInterval(async () => {
 		const now = Date.now()
+
+		// PROACTIVE: Restore missing tabStates for Reddit tabs if monitoring is active
+		try {
+			const redditTabs = await chrome.tabs.query({ url: '*://*.reddit.com/*' });
+			for (const tab of redditTabs) {
+				if (!tabStates[tab.id]) {
+					const syncResult = await chrome.storage.sync.get(['redditUser']);
+					const userName = syncResult.redditUser?.seren_name;
+					if (userName) {
+						const monitoring = await PostDataService.getActiveMonitoring(userName);
+						if (monitoring && monitoring.monitoringEndTime > now) {
+							bgLogger.log(`[BG] ⏰ WATCHDOG: Restoring missing monitoring state for ${userName} on tab ${tab.id}`);
+							tabStates[tab.id] = {
+								status: SM_STEPS.COLLECTING_POSTS,
+								userName: userName,
+								stepStartTime: now,
+								lastFeedbackTimestamp: now,
+								isRestored: true
+							};
+						}
+					}
+				}
+			}
+		} catch (e) {
+			bgLogger.warn('[BG] Watchdog restoration check failed:', e);
+		}
+
 		for (const [tabIdStr, state] of Object.entries(tabStates)) {
 			if (!state) continue
+			const tabId = parseInt(tabIdStr)
+
+			const cleanupDecisionKey = `lastDecisionReport`
+			const storageResult = await chrome.storage.local.get([cleanupDecisionKey])
+			const decisionReport = storageResult[cleanupDecisionKey]
+
+			if (decisionReport && decisionReport.decision === 'wait' && decisionReport.monitoringEndTime) {
+				const isExpired = now >= decisionReport.monitoringEndTime
+				if (isExpired) {
+					bgLogger.log(`[BG] ⏰ WATCHDOG: Monitoring expired for ${state.userName} on tab ${tabId}. Triggering immediate deletion and cleanup...`)
+
+					// PROACTIVE: Force clean slate for next check
+					await chrome.storage.local.remove(['latestPostsData'])
+					await AutoFlowStateManager.clearState(state.userName)
+					delete tabStates[tabIdStr] // Clear RAM state
+
+					// Reload and trigger check immediately
+					chrome.tabs.reload(tabId).catch(() => { })
+					setTimeout(() => {
+						triggerPeriodicCheck(tabId, state.userName)
+					}, 2000)
+					continue
+				}
+			}
+
+			// STANDARD: Stall detection
 			if (state.status === SM_STEPS.POSTING) continue
 			const lastTs = state.lastFeedbackTimestamp || state.stepStartTime
 			if (!lastTs) continue
 			if (now - lastTs <= STALL_TIMEOUT_MS) continue
 
 			const userName = state.userName
+			bgLogger.warn(`[BG] ⚠️ WATCHDOG: Stall detected for user ${userName} on tab ${tabIdStr}. Restarting...`)
 			delete tabStates[tabIdStr]
-			restartAutoFlowFromBeginning(userName).catch(() => {})
+			restartAutoFlowFromBeginning(userName).catch(() => { })
 		}
-	}, 30000))
+	}, 15000)) // Check every 15s for better responsiveness
 })

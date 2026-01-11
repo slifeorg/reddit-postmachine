@@ -480,8 +480,30 @@ export function checkAndAdvanceState(tabId, state, url) {
 /**
  * Handle CONTENT_SCRIPT_READY message
  */
-export function handleContentScriptReady(tabId, url) {
-	const state = tabStates[tabId]
+export async function handleContentScriptReady(tabId, url) {
+	let state = tabStates[tabId]
+
+	if (!state && url.includes('reddit.com')) {
+		// Try to restore state for this user if we are monitoring
+		const syncResult = await chrome.storage.sync.get(['redditUser'])
+		const userName = syncResult.redditUser?.seren_name
+
+		if (userName) {
+			const monitoring = await PostDataService.getActiveMonitoring(userName)
+			if (monitoring && monitoring.monitoringEndTime > Date.now()) {
+				bgLogger.log(`[BG] 🔄 Restoring monitoring state for ${userName} on tab ${tabId}`)
+				state = {
+					status: SM_STEPS.COLLECTING_POSTS,
+					userName: userName,
+					stepStartTime: Date.now(),
+					lastFeedbackTimestamp: Date.now(),
+					isRestored: true
+				}
+				tabStates[tabId] = state
+			}
+		}
+	}
+
 	if (state) {
 		bgLogger.log(`Content script ready in tab ${tabId} (State: ${state.status}). URL: ${url}`)
 		checkAndAdvanceState(tabId, state, url)
@@ -782,6 +804,11 @@ async function handleGetPostsAction(tabId, state, data) {
 					}
 					await PostDataService.saveExecutionResult(executionResult)
 
+					// Persist active monitoring for background watchdog
+					if (monitoringEndTime) {
+						await PostDataService.saveActiveMonitoring(state.userName, monitoringEndTime, result.lastPost?.timestamp)
+					}
+
 					bgLogger.log(`[BG] ⏰ Monitoring until: ${monitoringEndTime ? new Date(monitoringEndTime).toLocaleTimeString() : 'unknown'}, ${timeLeftMinutes}m left`)
 
 					// Don't clear the tab state - keep it in monitoring mode
@@ -850,6 +877,7 @@ async function handleGetPostsAction(tabId, state, data) {
 					bgLogger.log('[BG] ✅ COMPLETE: No new post needed. Clearing state and waiting for next interval.')
 
 					await AutoFlowStateManager.clearState(state.userName)
+					await PostDataService.clearActiveMonitoring(state.userName)
 
 					const executionResult = {
 						status: 'skipped',
@@ -1058,13 +1086,18 @@ async function handleDeletePostCompleted(tabId, state, success, data) {
 
 	if (success) {
 		bgLogger.log('[BG] ✅ Delete was successful, clearing cache and restarting autoflow from beginning')
+	} else {
+		bgLogger.warn('[BG] ⚠️ Delete failed, but checking if we should restart anyway...')
+	}
+
+	if (success || (state && (state.deletingBeforeCreating || state.targetAction === 'delete_and_create'))) {
 		bgLogger.log('[BG] 🔄 AUTO FLOW RESTART - Step 1: Clearing cached posts data')
 		await chrome.storage.local.remove(['latestPostsData'])
 
 		if (userName) {
 			bgLogger.log(`[BG] 🔄 AUTO FLOW RESTART - Step 2: Restarting autoflow analysis for user: ${userName}`)
 
-			// Store the deleted post ID to filter it out in subsequent analysis
+			// Store the deleted post ID to filter it out in subsequent analysis (if we have it)
 			const deletedPostId = data?.postId || null
 			if (deletedPostId) {
 				await chrome.storage.local.set({
@@ -1126,7 +1159,7 @@ async function handleDeletePostCompleted(tabId, state, success, data) {
 			bgLogger.log('[BG] State data available:', { state, data })
 		}
 	} else {
-		bgLogger.log('[BG] ❌ Delete failed, not restarting autoflow')
+		bgLogger.log('[BG] ❌ Delete failed and not part of auto-flow, stopping.')
 		bgLogger.log('[BG] Failure data:', data)
 	}
 }
@@ -1403,6 +1436,38 @@ export async function handleCheckUserStatus(userName, sendResponse) {
 	bgLogger.log(`[BG] User status check requested for ${userName} - starting auto flow`)
 
 	try {
+		// First check if we are currently monitoring this user
+		const monitoring = await PostDataService.getActiveMonitoring(userName);
+		if (monitoring && monitoring.monitoringEndTime > Date.now()) {
+			bgLogger.log(`[BG] ⏳ User ${userName} is already being monitored. Preserving state.`);
+
+			// Try to find a Reddit tab to focus, or create one if none exist
+			const existingTabs = await chrome.tabs.query({ url: '*://*.reddit.com/*' });
+			if (existingTabs.length > 0) {
+				const tabId = existingTabs[0].id;
+				chrome.tabs.update(tabId, { active: true });
+
+				// Re-initialize state for this tab if missing
+				if (!tabStates[tabId]) {
+					tabStates[tabId] = {
+						status: SM_STEPS.COLLECTING_POSTS,
+						userName: userName,
+						stepStartTime: Date.now(),
+						lastFeedbackTimestamp: Date.now(),
+						isRestored: true
+					};
+				}
+
+				sendResponse({
+					success: true,
+					message: 'Monitoring active, focused existing Reddit tab',
+					status: 'monitoring',
+					timeLeftMinutes: Math.ceil((monitoring.monitoringEndTime - Date.now()) / 60000)
+				});
+				return;
+			}
+		}
+
 		const existingState = await AutoFlowStateManager.recoverState(userName)
 		if (existingState) {
 			bgLogger.log(`[BG] 🔄 Resuming interrupted auto-flow for ${userName} at step: ${existingState.currentStep}`)

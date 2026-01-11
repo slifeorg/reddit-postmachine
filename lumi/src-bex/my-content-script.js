@@ -113,16 +113,9 @@ function removeBeforeUnloadListeners() {
 
 	// Remove window onbeforeunload handler
 	window.onbeforeunload = null
+	document.onbeforeunload = null
 
-	// Add our own passive beforeunload listener that prevents the dialog
-	window.addEventListener('beforeunload', (e) => {
-		// Prevent the default behavior and don't show any dialog
-		e.preventDefault()
-		e.returnValue = null
-		return null
-	}, true)
-
-	contentLogger.log('Beforeunload listeners disabled successfully')
+	contentLogger.log('Beforeunload listeners disabled')
 }
 
 function initializeRedditIntegration() {
@@ -153,6 +146,90 @@ function initializeRedditIntegration() {
 					contentLogger.warn('URL Poller error:', err);
 				}
 			});
+		}
+	}, 1000);
+
+	// --- PERSISTENT FLOATING TIMER ---
+	let timerElement = null;
+	const createTimerUI = () => {
+		if (timerElement) return;
+		timerElement = document.createElement('div');
+		timerElement.id = 'reddit-post-machine-floating-timer';
+		Object.assign(timerElement.style, {
+			position: 'fixed',
+			bottom: '20px',
+			right: '20px',
+			backgroundColor: '#1a1a1b',
+			color: '#d7dadc',
+			padding: '12px 16px',
+			borderRadius: '12px',
+			boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
+			zIndex: '99999',
+			display: 'none',
+			alignItems: 'center',
+			gap: '12px',
+			fontFamily: 'Inter, -apple-system, system-ui, sans-serif',
+			border: '1px solid #343536',
+			transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+			cursor: 'default',
+			userSelect: 'none'
+		});
+
+		timerElement.innerHTML = `
+			<div style="background: #ff4500; width: 8px; height: 8px; border-radius: 50%; box-shadow: 0 0 8px #ff4500; animation: rpm-pulse 2s infinite;"></div>
+			<div>
+				<div style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.6; font-weight: 700;">Monitoring Post</div>
+				<div id="rpm-countdown-value" style="font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums;">00m 00s</div>
+			</div>
+		`;
+
+		const style = document.createElement('style');
+		style.id = 'rpm-floating-timer-styles';
+		style.textContent = `
+			@keyframes rpm-pulse {
+				0% { opacity: 1; transform: scale(1); }
+				50% { opacity: 0.5; transform: scale(1.2); }
+				100% { opacity: 1; transform: scale(1); }
+			}
+			#reddit-post-machine-floating-timer:hover {
+				transform: translateY(-4px);
+				border-color: #ff4500;
+				box-shadow: 0 8px 30px rgba(255, 69, 0, 0.2);
+			}
+		`;
+		document.head.appendChild(style);
+		document.body.appendChild(timerElement);
+	};
+
+	setInterval(async () => {
+		try {
+			const result = await chrome.storage.local.get(['lastExecutionResult']);
+			const lastExecutionResult = result.lastExecutionResult;
+
+			if (lastExecutionResult && lastExecutionResult.status === 'monitoring' && lastExecutionResult.monitoringEndTime) {
+				const now = Date.now();
+				const timeLeft = lastExecutionResult.monitoringEndTime - now;
+
+				if (timeLeft > 0) {
+					if (!timerElement) createTimerUI();
+					if (timerElement) {
+						timerElement.style.display = 'flex';
+						const minutes = Math.floor(timeLeft / 60000);
+						const seconds = Math.floor((timeLeft % 60000) / 1000);
+						const countdownVal = document.getElementById('rpm-countdown-value');
+						if (countdownVal) {
+							countdownVal.textContent = `${minutes}m ${seconds.toString().padStart(2, '0')}s`;
+						}
+					}
+					return;
+				}
+			}
+
+			if (timerElement) {
+				timerElement.style.display = 'none';
+			}
+		} catch (e) {
+			// Ignore storage errors during reload
 		}
 	}, 1000);
 
@@ -1700,6 +1777,14 @@ async function handleDeleteLastPost(userName) {
 		if (postsInfo.total === 0) {
 			const messageDiv = createMessageDiv('ℹ️', 'No Posts Found', 'No posts found to delete.', '#2196f3')
 			showTemporaryMessage(messageDiv)
+
+			// Notify background script - essentially a "success" because there's nothing to delete
+			chrome.runtime.sendMessage({
+				type: 'ACTION_COMPLETED',
+				action: 'DELETE_POST_COMPLETED',
+				success: true,
+				reason: 'no_posts_found'
+			}).catch(() => { })
 			return
 		}
 
@@ -1708,6 +1793,14 @@ async function handleDeleteLastPost(userName) {
 		if (!mostRecentPost || (!mostRecentPost._domElement && !mostRecentPost.element)) {
 			const messageDiv = createMessageDiv('❌', 'Post Not Found', 'Could not find the most recent post.', '#ff5722')
 			showTemporaryMessage(messageDiv)
+
+			// Notify background script of failure
+			chrome.runtime.sendMessage({
+				type: 'ACTION_COMPLETED',
+				action: 'DELETE_POST_COMPLETED',
+				success: false,
+				reason: 'post_element_not_found'
+			}).catch(() => { })
 			return
 		}
 

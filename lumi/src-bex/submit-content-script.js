@@ -14,22 +14,43 @@ function installBeforeUnloadBlocker() {
 		if (window.__rpm_beforeunload_blocker_installed) return true
 		window.__rpm_beforeunload_blocker_installed = true
 
-		submitLogger.log('Installing beforeunload blocker (prevents "Leave site?" dialog)')
+		submitLogger.log('Installing robust beforeunload blocker')
 
+		// 1. Neutralize existing handlers
 		window.onbeforeunload = null
 		document.onbeforeunload = null
 
-		const handler = (e) => {
-			try {
-				e.stopImmediatePropagation?.()
-				e.stopPropagation?.()
-			} catch (_) { }
+		// 2. Prevent re-assignment of onbeforeunload
+		try {
+			Object.defineProperty(window, 'onbeforeunload', {
+				get: () => null,
+				set: () => { },
+				configurable: false
+			})
+		} catch (e) {
+			submitLogger.warn('Could not defineProperty onbeforeunload:', e)
 		}
 
-		window.addEventListener('beforeunload', handler, { capture: true })
-		document.addEventListener('beforeunload', handler, { capture: true })
+		// 3. Patch addEventListener to ignore beforeunload
+		const originalAddEventListener = window.addEventListener
+		window.addEventListener = function (type, listener, options) {
+			if (type === 'beforeunload') {
+				submitLogger.log('Blocked addEventListener for beforeunload')
+				return
+			}
+			return originalAddEventListener.apply(this, arguments)
+		}
 
-		submitLogger.log('beforeunload blocker installed')
+		// 4. Add a capturing listener that stops everything
+		const stopper = (e) => {
+			e.stopImmediatePropagation()
+			e.stopPropagation()
+			delete e.returnValue
+			return undefined
+		}
+		originalAddEventListener.call(window, 'beforeunload', stopper, true)
+
+		submitLogger.log('Beforeunload blocker installed successfully')
 		return true
 	} catch (error) {
 		submitLogger.warn('Failed to install beforeunload blocker:', error)
@@ -181,7 +202,19 @@ function cleanUsername(text) {
 }
 
 function sanitizeExtractedUsername(raw) {
-	return cleanUsername(raw);
+	return (raw || '').toString().replace(/^u\//i, '').trim();
+}
+
+/**
+ * Strips all URLs from a given string.
+ * @param {string} text
+ * @returns {string}
+ */
+function stripUrls(text) {
+	if (!text) return '';
+	// Simple regex for URLs (http, https, www)
+	const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+)/gi;
+	return text.replace(urlRegex, '').replace(/\s+/g, ' ').trim();
 }
 
 // Strict helper to find username via "View Profile" text
@@ -950,7 +983,7 @@ async function runPostSubmissionScript(skipTabStateCheck = false) {
 
 		// Determine body text ONLY.
 		// IMPORTANT: Never append any URL into the body text. `postData.url` is a separate parameter.
-		let bodyText = (
+		let bodyTextRaw = (
 			postData.body ??
 			postData.bodyText ??
 			postData.content ??
@@ -959,6 +992,8 @@ async function runPostSubmissionScript(skipTabStateCheck = false) {
 			postData.message ??
 			''
 		).toString();
+
+		let bodyText = stripUrls(bodyTextRaw);
 
 		// Guard: do NOT publish without body text
 		if (!bodyText || !bodyText.trim()) {
@@ -1004,12 +1039,7 @@ async function runPostSubmissionScript(skipTabStateCheck = false) {
 			return;
 		}
 
-		if (!isLinkPost && postData.url && postData.url.trim() && !bodyText.includes(postData.url)) {
-			if (!postData.url.includes('reddit.com/r/')) {
-				bodyText += `\n\n${postData.url}`;
-				submitLogger.log('Appended URL to body text.');
-			}
-		}
+		// URL appending logic removed as per user request to never include URLs in body text.
 
 		const postDataWithBody = { ...postData, body: bodyText };
 		const bodyOk = await fillBody(postDataWithBody);
