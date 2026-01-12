@@ -28,6 +28,19 @@ const OPERATIONS = {
 }
 
 /**
+ * True if URL points to Reddit chat. We never want to close or "adopt" chat tabs.
+ */
+function isRedditChatUrl(url) {
+  try {
+    if (!url) return false
+    const u = new URL(url)
+    return u.hostname === 'chat.reddit.com'
+  } catch (_) {
+    return false
+  }
+}
+
+/**
  * Get the stored unified tab ID from storage
  */
 export async function getStoredUnifiedTabId() {
@@ -303,15 +316,16 @@ export async function closeAllRedditTabsAndOpenFresh(userName) {
       bgLogger.log(`[UnifiedTabMgr] 🚀 Using direct navigation to user's submitted page: ${targetUrl}`)
     }
 
-    // Find existing Reddit tabs
-    const redditTabs = await chrome.tabs.query({ url: '*://*.reddit.com/*' })
+    // Find existing Reddit tabs (excluding chat tabs — we must not close or control those)
+    const allRedditTabs = await chrome.tabs.query({ url: '*://*.reddit.com/*' })
+    const redditTabs = allRedditTabs.filter(tab => !isRedditChatUrl(tab.url))
 
-    // Try to find the currently active Reddit tab in the current window
+    // Try to find the currently active (non-chat) Reddit tab in the current window
     const activeTabs = await chrome.tabs.query({ active: true, currentWindow: true })
     let preferredTab = null
     if (activeTabs.length > 0) {
       const activeTab = activeTabs[0]
-      if (activeTab.url && activeTab.url.includes('reddit.com')) {
+      if (activeTab.url && activeTab.url.includes('reddit.com') && !isRedditChatUrl(activeTab.url)) {
         preferredTab = activeTab
       }
     }
@@ -321,7 +335,7 @@ export async function closeAllRedditTabsAndOpenFresh(userName) {
       preferredTab = redditTabs[0]
     }
 
-    // Close all other Reddit tabs except the preferred one (if any)
+    // Close all other (non-chat) Reddit tabs except the preferred one (if any)
     const tabsToClose = redditTabs.filter(tab => !preferredTab || tab.id !== preferredTab.id)
     if (tabsToClose.length > 0) {
       bgLogger.log(`[UnifiedTabMgr] Closing ${tabsToClose.length} other Reddit tabs, keeping tab ${preferredTab ? preferredTab.id : 'none yet'}`)
@@ -366,7 +380,7 @@ export async function closeAllRedditTabsAndOpenFresh(userName) {
 
       targetTab = await chrome.tabs.update(preferredTab.id, { url: targetUrl, active: true })
     } else {
-      bgLogger.log('[UnifiedTabMgr] No existing Reddit tab found; creating new one for autoflow')
+      bgLogger.log('[UnifiedTabMgr] No existing non-chat Reddit tab found; creating new one for autoflow')
 
       targetTab = await chrome.tabs.create({
         url: targetUrl,

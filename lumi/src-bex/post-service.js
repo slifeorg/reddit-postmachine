@@ -280,9 +280,9 @@ export class PostDataService {
 		// Iterate through ALL collected posts to find candidates for deletion.
 		// Priority: 
 		// 1. Any blocked/removed post -> Delete immediately.
-		// 2. Any post older than 20 minutes -> Delete immediately.
+		// 2. Any post older than 21 minutes -> Delete immediately.
 
-		const MONITORING_WINDOW_MINUTES = 20;
+		const MONITORING_WINDOW_MINUTES = 21;
 		const nowTime = new Date().getTime();
 
 		for (const post of postsToAnalyze) {
@@ -301,9 +301,9 @@ export class PostDataService {
 				return { shouldCreate: true, reason: reason, lastPost: post, decisionReport };
 			}
 
-			// Check for Old Posts (> 20 mins)
+			// Check for Old Posts (> 21 mins)
 			if (pAgeInMinutes >= MONITORING_WINDOW_MINUTES) {
-				postServiceLogger.log(`[PostDataService] 🗑️ DECISION: Found post older than 20 mins (ID: ${post.id}, Age: ${pAgeInMinutes.toFixed(1)}m). Deleting.`);
+				postServiceLogger.log(`[PostDataService] 🗑️ DECISION: Found post older than 21 mins (ID: ${post.id}, Age: ${pAgeInMinutes.toFixed(1)}m). Deleting.`);
 
 				decisionReport.decision = 'create_with_delete';
 				decisionReport.reason = 'cleanup_old_post';
@@ -315,7 +315,7 @@ export class PostDataService {
 			}
 		}
 
-		// If loop completes, it means NO posts are blocked AND NO posts are > 20 mins.
+		// If loop completes, it means NO posts are blocked AND NO posts are > 21 mins.
 		// We are in the "Monitoring" phase for the latest post (if it exists).
 
 		if (postsToAnalyze.length > 0) {
@@ -324,13 +324,13 @@ export class PostDataService {
 			const latestAgeMinutes = (nowTime - postTimestamp) / (1000 * 60);
 			const timeLeftMinutes = Math.ceil(MONITORING_WINDOW_MINUTES - latestAgeMinutes);
 
-			// Calculate monitoring end time (post creation time + 20 minutes)
+			// Calculate monitoring end time (post creation time + 21 minutes)
 			const monitoringEndTime = postTimestamp + (MONITORING_WINDOW_MINUTES * 60 * 1000);
 
 			postServiceLogger.log(`[PostDataService] ⏳ DECISION: Latest post is healthy and inside monitoring window (${latestAgeMinutes.toFixed(1)}m < ${MONITORING_WINDOW_MINUTES}m). Wait ${timeLeftMinutes}m.`);
 
 			decisionReport.decision = 'wait';
-			decisionReport.reason = 'monitoring (wait 20 min)';
+			decisionReport.reason = 'monitoring (wait 21 min)';
 			decisionReport.lastPostStatus = latestPost.itemState === 'UNMODERATED' ? 'unmoderated' : 'active';
 			decisionReport.monitoringEndTime = monitoringEndTime;
 			decisionReport.timeLeftMinutes = timeLeftMinutes;

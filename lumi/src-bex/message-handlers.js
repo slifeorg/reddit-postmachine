@@ -727,9 +727,9 @@ async function handleGetPostsAction(tabId, state, data) {
 				if (shouldDelete) {
 					bgLogger.log(`[BG] 🗑️ STEP 1: Attempting to delete last post before creating new one (Reason: ${result.reason})`)
 
-					// Special logging for cleanup_old_post scenario (after 20-minute monitoring)
+					// Special logging for cleanup_old_post scenario (after 21-minute monitoring)
 					if (result.reason === 'cleanup_old_post') {
-						bgLogger.log('[BG] 🎯 CLEANUP OLD POST: This is the automatic deletion after 20-minute monitoring period');
+						bgLogger.log('[BG] 🎯 CLEANUP OLD POST: This is the automatic deletion after 21-minute monitoring period');
 						bgLogger.log('[BG] 🎯 After successful deletion, auto flow will restart automatically');
 
 						// Reload page before deletion to ensure absolute fresh state as requested
@@ -784,7 +784,7 @@ async function handleGetPostsAction(tabId, state, data) {
 				}
 			} else {
 				if (result.reason === 'monitoring_new_post') {
-					bgLogger.log('[BG] ⏳ MONITORING: Inside 20-minute window. Scheduling next check in 2 minutes.')
+					bgLogger.log('[BG] ⏳ MONITORING: Inside 21-minute window. Scheduling next check in 2 minutes.')
 
 					const TWO_MINUTES_MS = 2 * 60 * 1000;
 
@@ -858,8 +858,7 @@ async function handleGetPostsAction(tabId, state, data) {
 						});
 						// Then trigger check after a short delay for page to load
 						setTimeout(() => {
-							bgLogger.log(`[BG] 🔄 Triggering periodic check for tab ${tabId}, user ${state.userName}`);
-							bgLogger.log(`[BG] 💡 If post is now > 20 mins old, this should delete it and restart auto flow`);
+							bgLogger.log(`[BG] 💡 If post is now > 21 mins old, this should delete it and restart auto flow`);
 							triggerPeriodicCheck(tabId, state.userName);
 						}, 2000);
 					}, nextCheckDelay);
@@ -1117,7 +1116,7 @@ async function handleDeletePostCompleted(tabId, state, success, data) {
 			bgLogger.log('[BG] 🔄 AUTO FLOW RESTART - Step 4: Waiting 3 seconds for Reddit to process deletion')
 			await new Promise(resolve => setTimeout(resolve, 3000))
 
-			// RELOAD submitted page to ensure fresh data after 20-minute monitoring period
+			// RELOAD submitted page to ensure fresh data after 21-minute monitoring period
 			bgLogger.log('[BG] 🔄 AUTO FLOW RESTART - Step 4.5: Reloading submitted page to fetch fresh data after monitoring period')
 			const cleanUsername = userName.replace('u/', '')
 			const submittedUrl = `https://www.reddit.com/user/${cleanUsername}/submitted/`
