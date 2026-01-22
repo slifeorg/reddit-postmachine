@@ -862,6 +862,17 @@ async function handleGetPostsAction(tabId, state, data) {
 
 					state.deletingBeforeCreating = true
 
+					// Update execution result to reflect deletion in progress
+					const deletionExecutionResult = {
+						status: 'deleting',
+						postResult: 'processing',
+						postId: result.lastPost?.id || null,
+						errorMessage: null,
+						timestamp: Date.now()
+					}
+					await PostDataService.saveExecutionResult(deletionExecutionResult)
+					bgLogger.log('[BG] 📊 Execution result updated to "deleting" status')
+
 					await AutoFlowStateManager.saveState('deleting_post', {
 						userName: state.userName,
 						lastPostToDelete: result.lastPost,
@@ -1222,7 +1233,17 @@ async function handleDeletePostCompleted(tabId, state, success, data) {
 		}
 		await PostDataService.saveExecutionResult(executionResult)
 	} else {
-		bgLogger.log('[BG] Skipping execution result save for auto-flow deletion - will save after post creation')
+		// For auto-flow deletion, save an intermediate "deleted" status before restarting
+		// This ensures the UI reflects the successful deletion before proceeding to creation
+		const intermediateResult = {
+			status: 'completed',
+			postResult: 'deleted',
+			postId: data?.postId || null,
+			errorMessage: null,
+			timestamp: Date.now()
+		}
+		await PostDataService.saveExecutionResult(intermediateResult)
+		bgLogger.log('[BG] 📊 Execution result updated to "deleted" status before autoflow restart')
 	}
 
 	// Update backend status when post is deleted

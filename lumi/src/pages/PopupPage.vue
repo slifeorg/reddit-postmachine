@@ -401,7 +401,9 @@ export default defineComponent({
 				completed: 'Completed',
 				failed: 'Failed',
 				skipped: 'Skipped',
-				in_progress: 'In Progress'
+				in_progress: 'In Progress',
+				deleting: 'Deleting',
+				monitoring: 'Monitoring'
 			}
 			return statusMap[status] || status
 		}
@@ -413,7 +415,9 @@ export default defineComponent({
 				deleted: 'Post Deleted',
 				deleted_and_created: 'Deleted & Created',
 				none: 'No Action Taken',
-				error: 'Error Occurred'
+				error: 'Error Occurred',
+				processing: 'Processing',
+				waiting: 'Waiting'
 			}
 			return resultMap[result] || result
 		}
@@ -476,7 +480,9 @@ export default defineComponent({
 				'completed': 'text-positive',
 				'failed': 'text-negative',
 				'skipped': 'text-warning',
-				'in_progress': 'text-info'
+				'in_progress': 'text-info',
+				'deleting': 'text-warning',
+				'monitoring': 'text-info'
 			}
 			return classMap[status] || ''
 		}
@@ -488,7 +494,9 @@ export default defineComponent({
 				'deleted': 'text-negative',
 				'deleted_and_created': 'text-warning',
 				'none': 'text-grey',
-				'error': 'text-negative'
+				'error': 'text-negative',
+				'processing': 'text-info',
+				'waiting': 'text-warning'
 			}
 			return classMap[result] || ''
 		}
