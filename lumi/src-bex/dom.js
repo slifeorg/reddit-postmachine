@@ -57,6 +57,21 @@ const RedditDOMHelper = {
 		return null
 	},
 
+	// Helper to find all elements inside Shadow DOM
+	deepQueryAll(selector, root = document, results = []) {
+		try {
+			const matches = root.querySelectorAll(selector)
+			matches.forEach((el) => results.push(el))
+		} catch (e) {
+		}
+		for (const elem of root.querySelectorAll('*')) {
+			if (elem.shadowRoot) {
+				this.deepQueryAll(selector, elem.shadowRoot, results)
+			}
+		}
+		return results
+	},
+
 	// ✅ CRITICAL FIX: Find all posts across all Shadow Roots
 	collectAllPostsRecursive(root = document, results = []) {
 		// 1. Check current level
@@ -222,13 +237,44 @@ const RedditDOMHelper = {
 
 		try {
 			// 2. Open Overflow Menu (Three dots)
-			// It might be in Shadow DOM or Light DOM
-			let menuBtn = postElement.querySelector('shreddit-overflow-menu button') ||
-				this.deepQuery('button[aria-label="More options"]', postElement) ||
-				this.deepQuery('[data-testid="post-menu-trigger"]', postElement);
+			// It might be in Shadow DOM or Light DOM and labels can vary.
+			const menuSelectors = [
+				'shreddit-overflow-menu button',
+				'[data-testid="post-menu-trigger"]',
+				'button[aria-label="More options"]',
+				'button[aria-label="More actions"]',
+				'button[aria-label="Open post options"]',
+				'button[aria-label="Open user actions"]',
+				'button[aria-label="Open post menu"]',
+				'button[aria-label*="more"]',
+				'button[aria-label*="options"]',
+				'button[aria-label*="actions"]',
+				'button[id*="overflow"]'
+			];
 
-			if (!menuBtn && postElement.shadowRoot) {
-				menuBtn = this.deepQuery('button[aria-label="More options"]', postElement.shadowRoot);
+			let menuBtn = null;
+			for (const selector of menuSelectors) {
+				menuBtn = postElement.querySelector(selector) ||
+					this.deepQuery(selector, postElement) ||
+					(postElement.shadowRoot ? this.deepQuery(selector, postElement.shadowRoot) : null);
+				if (menuBtn) break;
+			}
+
+			if (!menuBtn) {
+				// Last resort: scan buttons inside the post for a "more/options" label
+				const buttonRoots = [postElement];
+				if (postElement.shadowRoot) buttonRoots.push(postElement.shadowRoot);
+				for (const root of buttonRoots) {
+					const buttons = root.querySelectorAll('button');
+					for (const btn of buttons) {
+						const label = (btn.getAttribute('aria-label') || btn.textContent || '').toLowerCase();
+						if (label.includes('more') || label.includes('option') || label.includes('action') || label.includes('menu')) {
+							menuBtn = btn;
+							break;
+						}
+					}
+					if (menuBtn) break;
+				}
 			}
 
 			if (!menuBtn) {
@@ -237,14 +283,22 @@ const RedditDOMHelper = {
 			}
 
 			menuBtn.click();
-			await this.sleep(1000);
+			await this.sleep(1500);
 
-			// 3. Find Delete Button
+			// 3. Find Delete/Remove Button
 			// This is usually in a portal/overlay at the end of <body>
-			const deleteBtn = this.findButtonByText('delete');
+			let deleteBtn = this.findMenuItemByKeywords(['delete', 'delete post', 'remove', 'trash']);
+
+			// Retry once in case menu didn't render yet
+			if (!deleteBtn) {
+				menuBtn.click();
+				await this.sleep(1500);
+				deleteBtn = this.findMenuItemByKeywords(['delete', 'delete post', 'remove', 'trash']);
+			}
 
 			if (!deleteBtn) {
 				domLogger.error('[DOM] Delete option not found in menu');
+				this.logMenuCandidates();
 				return false;
 			}
 
@@ -252,7 +306,7 @@ const RedditDOMHelper = {
 			await this.sleep(1000);
 
 			// 4. Confirm Deletion
-			const confirmBtn = this.findButtonByText('delete', true); // Search for "Delete" button in modals
+			const confirmBtn = this.findMenuItemByKeywords(['delete', 'remove', 'confirm', 'yes']); // Modal confirm
 
 			if (confirmBtn) {
 				confirmBtn.click();
@@ -295,6 +349,67 @@ const RedditDOMHelper = {
 
 		// 2. Check body
 		return searchRoot(document.body);
+	},
+
+	// Helper to find menu items or buttons by keywords in text/aria-label
+	findMenuItemByKeywords(keywords = []) {
+		const normalized = keywords.map(k => k.toLowerCase());
+		const portals = document.querySelectorAll('faceplate-portal, [role="dialog"], [role="menu"]');
+
+		const searchRoot = (root) => {
+			const items = root.querySelectorAll(
+				'button, [role="menuitem"], [role="button"], a, div[role="menuitem"], faceplate-dropdown-menu-item'
+			);
+			for (const el of items) {
+				const content = (el.textContent || '').toLowerCase();
+				const label = (el.getAttribute('aria-label') || '').toLowerCase();
+				const combined = `${content} ${label}`;
+				if (normalized.some(k => combined.includes(k))) {
+					return el;
+				}
+			}
+			return null;
+		};
+
+		for (const portal of portals) {
+			const found = searchRoot(portal) || (portal.shadowRoot && searchRoot(portal.shadowRoot));
+			if (found) return found;
+		}
+
+		// Fallback: search entire document including shadow roots
+		const candidates = this.deepQueryAll(
+			'button, [role="menuitem"], [role="button"], a, div[role="menuitem"], faceplate-dropdown-menu-item'
+		);
+		for (const el of candidates) {
+			const content = (el.textContent || '').toLowerCase();
+			const label = (el.getAttribute('aria-label') || '').toLowerCase();
+			const combined = `${content} ${label}`;
+			if (normalized.some(k => combined.includes(k))) {
+				return el;
+			}
+		}
+
+		return searchRoot(document.body);
+	},
+
+	logMenuCandidates() {
+		try {
+			const candidates = this.deepQueryAll(
+				'button, [role="menuitem"], [role="button"], a, div[role="menuitem"], faceplate-dropdown-menu-item'
+			);
+			const sample = [];
+			for (const el of candidates) {
+				const content = (el.textContent || '').trim();
+				const label = (el.getAttribute('aria-label') || '').trim();
+				if (!content && !label) continue;
+				sample.push(`${content || ''}${label ? ` [aria=${label}]` : ''}`.trim());
+				if (sample.length >= 12) break;
+			}
+			if (sample.length > 0) {
+				domLogger.log('[DOM] Menu candidates sample:', sample);
+			}
+		} catch (e) {
+		}
 	},
 
 	// ========================================================================

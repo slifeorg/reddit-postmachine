@@ -22,6 +22,7 @@ import {
 	handleSaveSettings,
 	handleUsernameStored,
 	handleGetStoredUsername,
+	handleRefreshStoredUsername,
 	handleUserStatusSaved,
 	handleGetUserStatus,
 	handleCreatePostFromPopup,
@@ -88,6 +89,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 		case 'GET_STORED_USERNAME':
 			handleGetStoredUsername(sendResponse)
+			return true
+
+		case 'REFRESH_STORED_USERNAME':
+			handleRefreshStoredUsername(sendResponse)
 			return true
 
 		case 'GET_USER_STATUS':
@@ -249,10 +254,11 @@ export default bexBackground((bridge) => {
 			if (decisionReport && decisionReport.decision === 'wait' && decisionReport.monitoringEndTime) {
 				const isExpired = now >= decisionReport.monitoringEndTime
 				if (isExpired) {
-					bgLogger.log(`[BG] ⏰ WATCHDOG: Monitoring expired for ${state.userName} on tab ${tabId}. Triggering immediate deletion and cleanup...`)
+					bgLogger.log(`[BG] ⏰ WATCHDOG: Monitoring expired for ${state.userName} on tab ${tabId}. Triggering immediate re-check (create without deletion)...`)
 
 					// PROACTIVE: Force clean slate for next check
 					await chrome.storage.local.remove(['latestPostsData', 'lastDecisionReport'])
+					await PostDataService.clearActiveMonitoring(state.userName).catch(() => { })
 					await AutoFlowStateManager.clearState(state.userName)
 					delete tabStates[tabIdStr] // Clear RAM state
 

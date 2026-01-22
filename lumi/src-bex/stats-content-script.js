@@ -126,10 +126,34 @@ async function initializeUsernameCache() {
 
 // Get authenticated username from user dropdown/avatar (shows YOUR username)
 function getAuthenticatedUsername() {
-	// Check cache first
+	// Check cache first, but validate it matches current page context if on a profile page
 	if (cachedUsername && Date.now() - cacheTimestamp < CACHE_DURATION) {
-		statsLogger.log(`Stats: Using cached authenticated username: ${cachedUsername}`)
-		return cachedUsername
+		// If we're on a profile page, verify the cached username matches
+		const urlMatch = window.location.href.match(/reddit\.com\/(?:u|user)\/([^\/]+)/)
+		if (urlMatch) {
+			const urlUsername = urlMatch[1]
+			const cleanCachedUsername = cachedUsername.replace('u/', '')
+
+			// Check if this is our own profile by looking for edit profile indicators
+			const hasEditButton = qs('button[data-testid="edit-profile-button"]') ||
+				qs('a[href*="/settings/profile"]') ||
+				document.querySelector('button') && Array.from(document.querySelectorAll('button')).some(btn =>
+					btn.textContent?.trim().toLowerCase().includes('edit profile')
+				)
+
+			// If URL username doesn't match cached username AND it's not our profile, clear cache
+			if (cleanCachedUsername !== urlUsername && !hasEditButton) {
+				statsLogger.log(`Stats: Cached username (${cachedUsername}) doesn't match URL (${urlUsername}) and it's not our profile - clearing cache`)
+				cachedUsername = null
+				cacheTimestamp = 0
+			} else {
+				statsLogger.log(`Stats: Using cached authenticated username: ${cachedUsername}`)
+				return cachedUsername
+			}
+		} else {
+			statsLogger.log(`Stats: Using cached authenticated username: ${cachedUsername}`)
+			return cachedUsername
+		}
 	}
 
 	// Try to get username from user dropdown without opening it
@@ -181,6 +205,26 @@ function getAuthenticatedUsername() {
 	return null
 }
 
+// Check if we're on our own profile page vs someone else's
+function isOwnProfilePage(username) {
+	// First check for edit profile indicators
+	if (hasOwnProfileIndicators()) {
+		statsLogger.log('Stats: Found own profile indicator, this is our profile')
+		return true
+	}
+
+	// Check if cached authenticated username matches URL username
+	if (cachedUsername && Date.now() - cacheTimestamp < CACHE_DURATION) {
+		const cleanAuthUsername = cachedUsername.replace('u/', '')
+		if (cleanAuthUsername === username) {
+			statsLogger.log('Stats: URL username matches cached authenticated username, this is our profile')
+			return true
+		}
+	}
+
+	return false
+}
+
 function extractUsernameFromPage() {
 	statsLogger.log('Stats: Extracting username from current page with authenticated priority...')
 
@@ -192,27 +236,24 @@ function extractUsernameFromPage() {
 	}
 
 	// Method 2: Only check URL if we're on our own profile page
+	// CRITICAL: We must verify this is OUR profile, not someone else's!
 	const urlMatch = window.location.href.match(/reddit\.com\/u\/([^\/]+)/) ||
 		window.location.href.match(/reddit\.com\/user\/([^\/]+)/)
-	if (urlMatch && urlMatch[1] !== 'adobe') { // Filter out obvious wrong usernames
-		statsLogger.log('Stats: Found username in URL:', urlMatch[1])
-		return urlMatch[1]
+	if (urlMatch && urlMatch[1] !== 'adobe') {
+		const urlUsername = urlMatch[1]
+
+		// Only use URL username if we can verify it's our own profile
+		if (isOwnProfilePage(urlUsername)) {
+			statsLogger.log(`Stats: Found username in URL and verified it's our profile: ${urlUsername}`)
+			return urlUsername
+		} else {
+			statsLogger.log(`Stats: Found username in URL (${urlUsername}) but it's NOT our profile - ignoring to avoid wrong user detection`)
+		}
 	}
 
 	// Method 3: Generic page element scanning as final fallback (with filtering)
-	const usernameElement = qs('[data-testid="username"], .username, [href*="/u/"]')
-	if (usernameElement) {
-		const username = usernameElement.textContent?.trim() ||
-			usernameElement.href?.match(/\/u\/([^\/]+)/)?.[1]
-		if (username && username.startsWith('u/')) {
-			const cleanUsername = username.replace('u/', '')
-			// Filter out obvious corporate/brand usernames that aren't real users
-			if (cleanUsername !== 'adobe' && cleanUsername.length > 2 && !cleanUsername.match(/^[a-z]+$/)) {
-				statsLogger.log('Stats: Found username in element fallback:', cleanUsername)
-				return cleanUsername
-			}
-		}
-	}
+	// REMOVED: This was causing issues with detecting wrong users from page elements
+	// We should only trust authenticated username or verified own profile URL
 
 	statsLogger.log('Stats: No authenticated username found, returning null to avoid wrong user detection')
 	return null

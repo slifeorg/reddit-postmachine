@@ -14,15 +14,13 @@ export class PostDataService {
 		const maxRetries = 3
 		const retryDelay = 1000 // 1 second base delay
 
-		// Remove u/ prefix if present
+		// Some backends expect agent with or without "u/" prefix.
+		// We'll try both to avoid hard-coupling the extension to one format.
 		const cleanAgentName = agentName.replace(/^u\//, '')
+		const agentCandidates = Array.from(new Set([cleanAgentName, agentName].filter(Boolean)))
 
 		for (let attempt = 1; attempt <= maxRetries; attempt++) {
 			try {
-				postServiceLogger.log(
-					`[PostDataService] Generating post for agent: ${cleanAgentName} (attempt ${attempt}/${maxRetries})`
-				)
-
 				// Get API configuration from storage
 				const storageResult = await chrome.storage.sync.get(['apiConfig'])
 				const apiConfig = storageResult.apiConfig || {
@@ -31,100 +29,122 @@ export class PostDataService {
 					token: '8fbbf0a7c626e18:2c3693fb52ac66f'
 				}
 
-				const requestBody = {
-					agent_name: cleanAgentName
-				}
+				for (let idx = 0; idx < agentCandidates.length; idx++) {
+					const candidate = agentCandidates[idx]
 
-				postServiceLogger.log('[PostDataService] API Request Details:', {
-					endpoint: apiConfig.endpoint,
-					agentName: cleanAgentName,
-					body: requestBody
-				})
+					postServiceLogger.log(
+						`[PostDataService] Generating post for agent: ${candidate} (attempt ${attempt}/${maxRetries})`
+					)
 
-				const response = await fetch(apiConfig.endpoint, {
-					method: 'POST',
-					headers: {
-						'Content-Type': 'application/json',
-						Authorization: `token ${apiConfig.token}`
-					},
-					body: JSON.stringify(requestBody)
-				})
+					const requestBody = { agent_name: candidate }
 
-				let data
-				try {
-					data = await response.json()
-				} catch (e) {
-					postServiceLogger.error('[PostDataService] Failed to parse response as JSON:', e)
-					throw new Error(`API request failed: ${response.status} ${response.statusText} - Invalid JSON response`)
-				}
+					postServiceLogger.log('[PostDataService] API Request Details:', {
+						endpoint: apiConfig.endpoint,
+						agentName: candidate,
+						body: requestBody
+					})
 
-				if (!response.ok) {
-					let errorDetails = `${response.status} ${response.statusText}`
-					postServiceLogger.error('[PostDataService] API Error Response:', data)
-					errorDetails += ` - ${JSON.stringify(data)}`
-					throw new Error(`API request failed: ${errorDetails}`)
-				}
-
-				postServiceLogger.log('[PostDataService] Generated post from API:', data)
-
-				// Handle new API response format with post_name
-				if (data && data.message && data.message.status === 'success' && data.message.post_name) {
-					postServiceLogger.log('[PostDataService] Received post_name, fetching full post data:', data.message.post_name)
-
-					// Second API call to get full post data using Frappe REST API
-					const postName = data.message.post_name
-					const frappeEndpoint = `https://32016-51127.bacloud.info/api/resource/Reddit%20Post/${postName}`
-
-					const frappeResponse = await fetch(frappeEndpoint, {
-						method: 'GET',
+					const response = await fetch(apiConfig.endpoint, {
+						method: 'POST',
 						headers: {
 							'Content-Type': 'application/json',
 							Authorization: `token ${apiConfig.token}`
-						}
+						},
+						body: JSON.stringify(requestBody)
 					})
 
-					if (!frappeResponse.ok) {
-						throw new Error(`Frappe API request failed: ${frappeResponse.status} ${frappeResponse.statusText}`)
+					let data
+					try {
+						data = await response.json()
+					} catch (e) {
+						postServiceLogger.error('[PostDataService] Failed to parse response as JSON:', e)
+						throw new Error(`API request failed: ${response.status} ${response.statusText} - Invalid JSON response`)
 					}
 
-					const frappeData = await frappeResponse.json()
-					postServiceLogger.log('[PostDataService] Fetched full post data from Frappe:', frappeData)
+					if (!response.ok) {
+						postServiceLogger.error('[PostDataService] API Error Response:', data)
+						const payload = JSON.stringify(data || {})
+						const isAccountNotFound =
+							payload.includes('Account not found') ||
+							payload.includes('account not found') ||
+							payload.includes('ValidationError')
 
-					// Extract post data from Frappe response
-					if (frappeData && frappeData.data) {
-						const postData = frappeData.data
-						return {
-							title: postData.title || 'Generated Post',
-							body: postData.body_text || postData.content || postData.body || '',
-							url: postData.url_to_share || postData.url || '',
-							subreddit: postData.subreddit_name || postData.subreddit || 'sphynx',
-							post_type: postData.post_type || 'link',
-							post_name: postData.name,
-							account: postData.account,
-							template_used: postData.template_used
+						// If backend couldn't map the agent to an account, try alternate agent format.
+						if (isAccountNotFound && idx < agentCandidates.length - 1) {
+							postServiceLogger.warn(
+								`[PostDataService] Backend rejected agent "${candidate}" (Account not found). Retrying with alternate agent format...`
+							)
+							continue
+						}
+
+						let errorDetails = `${response.status} ${response.statusText}`
+						errorDetails += ` - ${payload}`
+						throw new Error(`API request failed: ${errorDetails}`)
+					}
+
+					postServiceLogger.log('[PostDataService] Generated post from API:', data)
+
+					// Handle new API response format with post_name
+					if (data && data.message && data.message.status === 'success' && data.message.post_name) {
+						postServiceLogger.log('[PostDataService] Received post_name, fetching full post data:', data.message.post_name)
+
+						// Second API call to get full post data using Frappe REST API
+						const postName = data.message.post_name
+						const frappeEndpoint = `https://32016-51127.bacloud.info/api/resource/Reddit%20Post/${postName}`
+
+						const frappeResponse = await fetch(frappeEndpoint, {
+							method: 'GET',
+							headers: {
+								'Content-Type': 'application/json',
+								Authorization: `token ${apiConfig.token}`
+							}
+						})
+
+						if (!frappeResponse.ok) {
+							throw new Error(`Frappe API request failed: ${frappeResponse.status} ${frappeResponse.statusText}`)
+						}
+
+						const frappeData = await frappeResponse.json()
+						postServiceLogger.log('[PostDataService] Fetched full post data from Frappe:', frappeData)
+
+						// Extract post data from Frappe response
+						if (frappeData && frappeData.data) {
+							const postData = frappeData.data
+							return {
+								title: postData.title || 'Generated Post',
+								body: postData.body_text || postData.content || postData.body || '',
+								url: postData.url_to_share || postData.url || '',
+								subreddit: postData.subreddit_name || postData.subreddit || 'sphynx',
+								post_type: postData.post_type || 'link',
+								post_name: postData.name,
+								account: postData.account,
+								template_used: postData.template_used
+							}
 						}
 					}
-				}
 
-				// Fallback to legacy response format for backward compatibility
-				if (
-					data &&
-					data.message &&
-					data.message.docs &&
-					Array.isArray(data.message.docs) &&
-					data.message.docs.length > 0
-				) {
-					const apiPost = data.message.docs[0]
-					return {
-						title: apiPost.title || 'Generated Post',
-						body: apiPost.content || apiPost.body || '',
-						url: apiPost.url || '',
-						subreddit: apiPost.subreddit || 'sphynx',
-						post_type: apiPost.post_type || 'link'
+					// Fallback to legacy response format for backward compatibility
+					if (
+						data &&
+						data.message &&
+						data.message.docs &&
+						Array.isArray(data.message.docs) &&
+						data.message.docs.length > 0
+					) {
+						const apiPost = data.message.docs[0]
+						return {
+							title: apiPost.title || 'Generated Post',
+							body: apiPost.content || apiPost.body || '',
+							url: apiPost.url || '',
+							subreddit: apiPost.subreddit || 'sphynx',
+							post_type: apiPost.post_type || 'link'
+						}
 					}
+
+					throw new Error('Invalid API response structure or no post data returned')
 				}
 
-				throw new Error('Invalid API response structure or no post data returned')
+				throw new Error('Invalid API response structure or no post data returned (all agent formats failed)')
 			} catch (error) {
 				postServiceLogger.error(`[PostDataService] API call failed (attempt ${attempt}/${maxRetries}):`, error)
 
@@ -161,6 +181,8 @@ export class PostDataService {
 
 		// Check if there's a recently deleted post to filter out
 		const userName = postsData?.userName
+		// Monitoring window (minutes): wait this long before creating a new post without deletion
+		const MONITORING_WINDOW_MINUTES = 20
 		let deletedPostId = null
 		if (userName) {
 			const deletedPostKey = `deletedPost_${userName}`
@@ -276,50 +298,36 @@ export class PostDataService {
 		)
 
 		// Enhanced decision logic using new metadata
+		//
+		// IMPORTANT (business rule):
+		// - We delete posts that were blocked/removed by moderation.
+		// - When the monitoring window expires, the old post should be deleted before creating a new one.
 
-		// Iterate through ALL collected posts to find candidates for deletion.
-		// Priority: 
-		// 1. Any blocked/removed post -> Delete immediately.
-		// 2. Any post older than 21 minutes -> Delete immediately.
-
-		const MONITORING_WINDOW_MINUTES = 21;
 		const nowTime = new Date().getTime();
 
-		for (const post of postsToAnalyze) {
-			const pDate = new Date(post.timestamp);
-			const pAgeInMinutes = (nowTime - pDate.getTime()) / (1000 * 60);
-
-			// Check for Blocked/Removed
-			if (post.moderationStatus.isRemoved || post.moderationStatus.isBlocked || post.hasModeratorAction) {
-				const reason = post.moderationStatus.isRemoved ? 'post_removed_by_moderator' : 'post_blocked';
-				postServiceLogger.log(`[PostDataService] 🗑️ DECISION: Found blocked/removed post (ID: ${post.id}). Deleting.`);
-
-				decisionReport.decision = 'create_with_delete';
-				decisionReport.reason = reason;
-				decisionReport.lastPostStatus = reason === 'post_removed_by_moderator' ? 'removed' : 'blocked';
-				this.saveDecisionReport(decisionReport);
-				return { shouldCreate: true, reason: reason, lastPost: post, decisionReport };
-			}
-
-			// Check for Old Posts (> 21 mins)
-			if (pAgeInMinutes >= MONITORING_WINDOW_MINUTES) {
-				postServiceLogger.log(`[PostDataService] 🗑️ DECISION: Found post older than 21 mins (ID: ${post.id}, Age: ${pAgeInMinutes.toFixed(1)}m). Deleting.`);
-
-				decisionReport.decision = 'create_with_delete';
-				decisionReport.reason = 'cleanup_old_post';
-				decisionReport.lastPostStatus = 'active'; // Old but likely active/unmoderated
-				this.saveDecisionReport(decisionReport);
-				// We return 'create_with_delete' targeting this specific old post. 
-				// The flow will delete it, then restart, eventually confirming no old posts exist.
-				return { shouldCreate: true, reason: 'cleanup_old_post', lastPost: post, decisionReport };
-			}
-		}
-
-		// If loop completes, it means NO posts are blocked AND NO posts are > 21 mins.
-		// We are in the "Monitoring" phase for the latest post (if it exists).
+		// IMPORTANT:
+		// Deletion is executed by content-script as "delete most recent post".
+		// Therefore, our delete decision MUST be based ONLY on the most recent post,
+		// otherwise we can accidentally delete healthy posts.
 
 		if (postsToAnalyze.length > 0) {
 			const latestPost = postsToAnalyze[0];
+
+			// 1) If the MOST RECENT post is blocked/removed -> delete it, then create new.
+			const isRemoved = latestPost?.moderationStatus?.isRemoved === true
+			const isBlocked = latestPost?.moderationStatus?.isBlocked === true
+			if (isRemoved || isBlocked) {
+				const reason = isRemoved ? 'post_removed_by_moderator' : 'post_blocked'
+				postServiceLogger.log(`[PostDataService] 🗑️ DECISION: Latest post is blocked/removed (ID: ${latestPost.id}). Deleting it (then create new).`)
+
+				decisionReport.decision = 'create_with_delete'
+				decisionReport.reason = reason
+				decisionReport.lastPostStatus = isRemoved ? 'removed' : 'blocked'
+				this.saveDecisionReport(decisionReport)
+				return { shouldCreate: true, reason: reason, lastPost: latestPost, decisionReport }
+			}
+
+			// 2) Latest post is NOT blocked/removed. Apply monitoring window.
 			const postTimestamp = new Date(latestPost.timestamp).getTime();
 			const latestAgeMinutes = (nowTime - postTimestamp) / (1000 * 60);
 			const timeLeftMinutes = Math.ceil(MONITORING_WINDOW_MINUTES - latestAgeMinutes);
@@ -327,10 +335,27 @@ export class PostDataService {
 			// Calculate monitoring end time (post creation time + 21 minutes)
 			const monitoringEndTime = postTimestamp + (MONITORING_WINDOW_MINUTES * 60 * 1000);
 
+			if (latestAgeMinutes >= MONITORING_WINDOW_MINUTES) {
+				postServiceLogger.log(`[PostDataService] ⏰ DECISION: Monitoring expired (${latestAgeMinutes.toFixed(1)}m >= ${MONITORING_WINDOW_MINUTES}m). Delete old post, then create new.`);
+
+				decisionReport.decision = 'create_with_delete';
+				decisionReport.reason = 'monitoring_expired';
+				decisionReport.lastPostStatus = 'active';
+				decisionReport.monitoringEndTime = monitoringEndTime;
+				decisionReport.timeLeftMinutes = 0;
+				this.saveDecisionReport(decisionReport);
+
+				if (userName) {
+					await this.clearActiveMonitoring(userName);
+				}
+
+				return { shouldCreate: true, reason: 'monitoring_expired', lastPost: latestPost, decisionReport };
+			}
+
 			postServiceLogger.log(`[PostDataService] ⏳ DECISION: Latest post is healthy and inside monitoring window (${latestAgeMinutes.toFixed(1)}m < ${MONITORING_WINDOW_MINUTES}m). Wait ${timeLeftMinutes}m.`);
 
 			decisionReport.decision = 'wait';
-			decisionReport.reason = 'monitoring (wait 21 min)';
+			decisionReport.reason = `monitoring (wait ${MONITORING_WINDOW_MINUTES} min)`;
 			decisionReport.lastPostStatus = latestPost.itemState === 'UNMODERATED' ? 'unmoderated' : 'active';
 			decisionReport.monitoringEndTime = monitoringEndTime;
 			decisionReport.timeLeftMinutes = timeLeftMinutes;
@@ -450,37 +475,39 @@ export class PostDataService {
 	static async getLatestPostFromFrappe(agentName) {
 		try {
 			const cleanAgentName = agentName.replace(/^u\//, '')
+			const agentCandidates = Array.from(new Set([cleanAgentName, agentName].filter(Boolean)))
 			const storageResult = await chrome.storage.sync.get(['apiConfig'])
 			const apiConfig = storageResult.apiConfig || {
 				token: '8fbbf0a7c626e18:2c3693fb52ac66f'
 			}
 
-			// We use subreddit_agent or similar. Since we aren't 100% sure of the field name,
-			// we will try to fetch with a generic filter if possible, or just skip if it fails.
-			// Let's assume the field is subreddit_agent as it's common in this project's Frappe schema.
-			const filterEndpoint = `https://32016-51127.bacloud.info/api/resource/Reddit%20Post?filters=[["subreddit_agent","=","${encodeURIComponent(cleanAgentName)}"]]&order_by=posted_at desc&limit_page_length=1&fields=["name","posted_at","status","reddit_post_id","reddit_post_url","title","score","comments"]`
+			// We use subreddit_agent or similar; try both "u/" and non-"u/" variants.
+			for (const candidate of agentCandidates) {
+				const filterEndpoint = `https://32016-51127.bacloud.info/api/resource/Reddit%20Post?filters=[["subreddit_agent","=","${encodeURIComponent(candidate)}"]]&order_by=posted_at desc&limit_page_length=1&fields=["name","posted_at","status","reddit_post_id","reddit_post_url","title","score","comments"]`
 
-			const response = await fetch(filterEndpoint, {
-				method: 'GET',
-				headers: {
-					'Content-Type': 'application/json',
-					Authorization: `token ${apiConfig.token}`
+				const response = await fetch(filterEndpoint, {
+					method: 'GET',
+					headers: {
+						'Content-Type': 'application/json',
+						Authorization: `token ${apiConfig.token}`
+					}
+				})
+
+				if (!response.ok) {
+					postServiceLogger.warn(`[PostDataService] Frappe latest-post lookup failed for "${candidate}": ${response.status}`)
+					continue
 				}
-			})
 
-			if (!response.ok) {
-				throw new Error(`Frappe API request failed: ${response.status}`)
-			}
-
-			const data = await response.json()
-			if (data.data && data.data.length > 0) {
-				const post = data.data[0]
-				if (post.posted_at) {
-					// Add UTC to ensure it's parsed as UTC if Frappe sends it that way
-					const postedDate = new Date(post.posted_at + (post.posted_at.includes('Z') ? '' : ' UTC'))
-					post.timestamp = postedDate.getTime()
+				const data = await response.json()
+				if (data.data && data.data.length > 0) {
+					const post = data.data[0]
+					if (post.posted_at) {
+						// Add UTC to ensure it's parsed as UTC if Frappe sends it that way
+						const postedDate = new Date(post.posted_at + (post.posted_at.includes('Z') ? '' : ' UTC'))
+						post.timestamp = postedDate.getTime()
+					}
+					return post
 				}
-				return post
 			}
 			return null
 		} catch (error) {
@@ -638,7 +665,7 @@ export async function fetchNextPost() {
 
 		// Check if we should create a post
 		if (await PostDataService.shouldCreatePost({ userName: agentName })) {
-			const postData = await PostDataService.generatePost(cleanAgentName)
+			const postData = await PostDataService.generatePost(agentName)
 			postServiceLogger.log('[BG] API service says: CREATE POST')
 			return postData
 		}

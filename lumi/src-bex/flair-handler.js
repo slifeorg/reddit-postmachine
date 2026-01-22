@@ -243,6 +243,44 @@ async function findAddFlairButtonOnForm() {
 	}
 }
 
+function isFlairMandatory(addFlairButton) {
+	try {
+		if (!addFlairButton) return false
+
+		const textMatchesRequired = (text) => {
+			if (!text) return false
+			const normalized = text.toLowerCase().replace(/\s+/g, ' ').trim()
+			if (normalized.includes('required')) return true
+			if (normalized.includes('flair') && normalized.includes('*')) return true
+			if (normalized.includes('flair') && normalized.includes('•')) return true
+			return false
+		}
+
+		const candidates = [
+			addFlairButton.textContent,
+			addFlairButton.getAttribute('aria-label'),
+			addFlairButton.getAttribute('title')
+		]
+		if (candidates.some(textMatchesRequired)) return true
+
+		const container = addFlairButton.closest('fieldset, section, form, div') || addFlairButton.parentElement
+		if (!container) return false
+
+		const labeledRequired = Array.from(container.querySelectorAll('label, span, div, p'))
+			.map((el) => el.textContent)
+			.some(textMatchesRequired)
+		if (labeledRequired) return true
+
+		const requiredAttr = container.querySelector('[aria-required="true"], [required]')
+		if (requiredAttr) return true
+
+		return false
+	} catch (error) {
+		submitLogger.warn('Error checking if flair is mandatory:', error)
+		return false
+	}
+}
+
 // Get the flair button from shadow DOM (legacy function for modal)
 async function getFlairButton() {
 	try {
@@ -299,17 +337,30 @@ async function openFlairSelector() {
 	return await openFlairSelectorFromForm()
 }
 
-// Priority list for flair selection
+// Priority list for flair selection (only typical allowed variants)
 const FLAIR_PRIORITY_LIST = [
 	'F4M', 'F 4 M', 'f4m', 'w4m', 'W 4 M', 'Baltimore', 'Female', 'Female 4 Male',
-	'[ ]', 'Female Looking For', 'pic', 'W4M', 'Single Female', 'Ask Sissies', 'F for M',
-	'Gender', '💋 SEXY 💋', '💋SEXY💋'
+	'female', 'Female',
+	'pic', 'Pic',
+	'[ ]'
 ]
 
 // Helper function to normalize flair text for comparison
 function normalizeFlairText(text) {
 	if (!text) return ''
 	return text.toLowerCase().replace(/\s+/g, '')
+}
+
+function isAllowedFlairText(text) {
+	const normalized = normalizeFlairText(text)
+	if (!normalized) return false
+
+	return (
+		normalized.startsWith('f4') ||
+		normalized.startsWith('female') ||
+		normalized.startsWith('pic') ||
+		normalized.startsWith('[')
+	)
 }
 
 // Find and select flair from priority list
@@ -411,6 +462,11 @@ async function selectFlairFromPriorityList() {
 			}
 
 			if (optionText || option.tagName === 'INPUT' || option.tagName === 'LABEL') {
+				if (!isAllowedFlairText(optionText)) {
+					submitLogger.log(`Skipping non-allowed flair: "${optionText}"`)
+					processedElements.add(option)
+					continue
+				}
 				validOptions.push({ element: option, text: optionText, isEmpty: false, isEditable: false })
 				processedElements.add(option)
 			}
@@ -902,7 +958,13 @@ async function handleAutomaticFlairSelection() {
 			return { success: true, skipped: true, reason: 'Button not found' }
 		}
 
-		submitLogger.log('"Add flair" button found - flair selection is MANDATORY, opening modal...')
+		const isMandatory = isFlairMandatory(addFlairButton)
+		if (!isMandatory) {
+			submitLogger.log('"Add flair" button found but flair is optional - skipping flair selection')
+			return { success: true, skipped: true, reason: 'Flair not required' }
+		}
+
+		submitLogger.log('"Add flair" button found and marked required - opening modal...')
 
 		// Step 2: Open flair selector modal
 		if (!await openFlairSelectorFromForm()) {

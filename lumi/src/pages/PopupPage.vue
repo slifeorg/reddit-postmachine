@@ -107,7 +107,7 @@
                 </span>
 							</div>
 							<div class="decision-item">
-								<strong>Reason:</strong> 
+								<strong>Reason:</strong>
 								{{ formatReason(decisionReport.reason) }}
 								<span v-if="monitoringCountdown" class="text-primary q-ml-sm">
 									({{ monitoringCountdown }} remaining)
@@ -158,7 +158,7 @@
 
 			<!-- Version footer -->
 			<div class="q-mt-xs q-pt-none text-center text-caption text-grey-6">
-				v0.9.1
+				v0.9.6
 			</div>
 
 		</div>
@@ -278,6 +278,26 @@ export default defineComponent({
 			}
 		}
 
+		// Refresh local storage copy of username once on popup open to avoid stale values
+		const refreshStoredUsername = async () => {
+			if (typeof chrome === 'undefined' || !chrome.runtime) return
+			try {
+				const response = await new Promise((resolve) => {
+					chrome.runtime.sendMessage({ type: 'REFRESH_STORED_USERNAME' }, resolve)
+				})
+
+				if (response && response.success && response.data?.seren_name) {
+					storedUsername.value = response.data.seren_name
+					console.log('Popup: Username refreshed from', response.source, response.data.seren_name)
+				} else if (response?.cleared) {
+					storedUsername.value = ''
+					console.log('Popup: Cleared stale username on refresh')
+				}
+			} catch (error) {
+				console.error('Popup: Error refreshing stored username:', error)
+			}
+		}
+
 		// Load decision report when popup opens
 		const loadDecisionReport = async () => {
 			try {
@@ -345,13 +365,13 @@ export default defineComponent({
 		const monitoringCountdown = computed(() => {
 			const endTime = executionResult.value?.monitoringEndTime
 			if (!endTime || executionResult.value?.status !== 'monitoring') return null
-			
+
 			const timeLeft = endTime - currentTime.value
 			if (timeLeft <= 0) return '0m 0s'
-			
+
 			const minutes = Math.floor(timeLeft / (1000 * 60))
 			const seconds = Math.floor((timeLeft % (1000 * 60)) / 1000)
-			
+
 			return `${minutes}m ${seconds}s`
 		})
 
@@ -541,7 +561,12 @@ export default defineComponent({
 
 		// Load username and user status on component mount
 		onMounted(() => {
-			loadStoredUsername()
+			// Force a one-time refresh of local storage username to avoid stale values
+			refreshStoredUsername().finally(() => {
+				// After refresh completes (success or fail), load the latest username
+				loadStoredUsername()
+			})
+
 			loadUserStatus()
 			loadPostsData()
 			loadDecisionReport()

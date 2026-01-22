@@ -28,7 +28,9 @@ import {
 	OPERATIONS,
 	closeAllRedditTabsAndOpenFresh,
 	getStoredUnifiedTabId,
-	isTabValid
+	isTabValid,
+	isRedditChatUrl,
+	releasePostCreationLock
 } from './unified-tab-manager.js'
 
 // Finalize reload listeners and timeouts
@@ -37,6 +39,96 @@ const finalizeReloadTimeouts = {}
 
 // Track in-flight GET_POSTS actions to prevent duplicates
 const inFlightGetPosts = new Set()
+
+// Old-post cleanup threshold (minutes)
+const OLD_POST_THRESHOLD_MINUTES = 20
+
+function normalizeTimestampMs(value) {
+	if (!value) return null
+	if (typeof value === 'number' && Number.isFinite(value)) {
+		return value < 1e12 ? value * 1000 : value
+	}
+	const parsed = Date.parse(value)
+	if (Number.isNaN(parsed)) return null
+	return parsed
+}
+
+function getPostsOlderThanMinutes(posts, minutes) {
+	if (!Array.isArray(posts) || posts.length === 0) return []
+	const cutoff = Date.now() - minutes * 60 * 1000
+	return posts.filter((post) => {
+		const ts = normalizeTimestampMs(post?.timestamp)
+		return ts && ts <= cutoff
+	})
+}
+
+async function sendDeletePostCommand(tabId, post) {
+	if (!tabId || !post) return false
+	try {
+		await chrome.tabs.sendMessage(tabId, {
+			type: 'REDDIT_POST_MACHINE_DELETE_POST',
+			payload: { post }
+		})
+		return true
+	} catch (err) {
+		bgLogger.error(`[BG] ❌ Failed to send delete command for post ${post?.id || 'unknown'}:`, err)
+		return false
+	}
+}
+
+async function startDeleteOldPostsFlow(tabId, state, postsToDelete) {
+	if (!tabId || !postsToDelete?.length) return false
+
+	const userName = state?.userName || null
+	bgLogger.log(
+		`[BG] 🧹 Found ${postsToDelete.length} posts older than ${OLD_POST_THRESHOLD_MINUTES} minutes. Starting deletion queue.`
+	)
+
+	const queue = postsToDelete.slice()
+	const updatedState = {
+		...(state || {}),
+		status: SM_STEPS.DELETING_POST,
+		userName,
+		deletingOldPosts: true,
+		deletingBeforeCreating: true,
+		targetAction: 'delete_old_then_create',
+		deleteQueue: queue,
+		currentDeletePost: queue[0]
+	}
+
+	tabStates[tabId] = updatedState
+
+	await AutoFlowStateManager.saveState('deleting_old_posts', {
+		userName,
+		targetAction: 'delete_old_then_create',
+		tabId,
+		deleteQueueSize: queue.length
+	})
+
+	const sent = await sendDeletePostCommand(tabId, queue[0])
+	if (!sent) {
+		// If we fail to send the first delete, keep moving to avoid a stuck queue
+		queue.shift()
+		updatedState.deleteQueue = queue
+		if (queue.length > 0) {
+			return sendDeletePostCommand(tabId, queue[0])
+		}
+
+		bgLogger.warn('[BG] ⚠️ Unable to dispatch delete commands. Restarting auto-flow check.')
+		updatedState.deletingOldPosts = false
+		updatedState.deletingBeforeCreating = false
+		updatedState.targetAction = 'auto_flow'
+		tabStates[tabId] = updatedState
+		if (userName) {
+			setTimeout(() => {
+				handleCheckUserStatus(userName, () => { })
+			}, 2000)
+		}
+		return false
+	}
+
+	return true
+}
 
 /**
  * Log message to a specific tab
@@ -483,7 +575,7 @@ export function checkAndAdvanceState(tabId, state, url) {
 export async function handleContentScriptReady(tabId, url) {
 	let state = tabStates[tabId]
 
-	if (!state && url.includes('reddit.com')) {
+	if (!state && url.includes('reddit.com') && !isRedditChatUrl(url)) {
 		// Try to restore state for this user if we are monitoring
 		const syncResult = await chrome.storage.sync.get(['redditUser'])
 		const userName = syncResult.redditUser?.seren_name
@@ -541,10 +633,38 @@ export async function handleActionCompleted(tabId, action, success, data) {
 
 	touchTabState(state)
 
-	if (!success) {
-		bgLogger.warn(`Action ${action} failed. Aborting automation.`)
-		delete tabStates[tabId]
+	if (!success && action === 'POST_CREATION_COMPLETED' && data?.errorCode === 'POST_REQUIRES_NEW') {
+		const userName = state?.userName || data?.username || data?.data?.username
+		bgLogger.warn('[BG] Post requires new submission. Reloading and restarting auto-flow.', data?.data?.reason || data?.error)
+
+		if (tabStates[tabId]) {
+			delete tabStates[tabId]
+		}
+
+		if (userName) {
+			await AutoFlowStateManager.clearState(userName)
+			await PostDataService.clearActiveMonitoring(userName)
+			await chrome.storage.local.remove(['latestPostsData'])
+
+			try {
+				await chrome.tabs.reload(tabId)
+			} catch (_) { }
+
+			setTimeout(() => {
+				handleCheckUserStatus(userName, () => { })
+			}, 2000)
+		}
 		return
+	}
+
+	if (!success) {
+		if (action === 'DELETE_POST' && state?.deletingOldPosts) {
+			bgLogger.warn('[BG] Delete failed during old-post cleanup; continuing queue.')
+		} else {
+			bgLogger.warn(`Action ${action} failed. Aborting automation.`)
+			delete tabStates[tabId]
+			return
+		}
 	}
 
 	if (action === 'NAVIGATE_PROFILE' && state.status === SM_STEPS.NAVIGATING_PROFILE) {
@@ -601,7 +721,7 @@ export async function handleActionCompleted(tabId, action, success, data) {
 		await handleGetPostsAction(tabId, state, data)
 	} else if (action === 'POST_CREATION_COMPLETED') {
 		await handlePostCreationCompleted(tabId, state, success, data)
-	} else if (action === 'DELETE_POST_COMPLETED') {
+	} else if (action === 'DELETE_POST_COMPLETED' || action === 'DELETE_POST') {
 		await handleDeletePostCompleted(tabId, state, success, data)
 	}
 }
@@ -708,6 +828,17 @@ async function handleGetPostsAction(tabId, state, data) {
 		bgLogger.log('[BG] Normalized cached data structure for analysis:', dataForAnalysis)
 	}
 
+	// Always delete posts older than the monitoring window before decision analysis
+	const oldPosts = getPostsOlderThanMinutes(dataForAnalysis?.postsInfo?.posts || [], OLD_POST_THRESHOLD_MINUTES)
+	if (oldPosts.length > 0 && !state?.deletingOldPosts) {
+		bgLogger.log(
+			`[BG] 🧹 Cleanup required: ${oldPosts.length} posts older than ${OLD_POST_THRESHOLD_MINUTES} minutes.`
+		)
+		await startDeleteOldPostsFlow(tabId, state, oldPosts)
+		inFlightGetPosts.delete(actionKey)
+		return
+	}
+
 	PostDataService.shouldCreatePost(dataForAnalysis)
 		.then(async (result) => {
 			bgLogger.log('[BG] 🎯 FINAL DECISION RESULT:', {
@@ -719,31 +850,15 @@ async function handleGetPostsAction(tabId, state, data) {
 			if (result.shouldCreate) {
 				bgLogger.log(`[BG] 🚀 EXECUTING: New post required. Reason: ${result.reason}`)
 
-				// Check if deletion is required
-				// We now check primarily for the explicit 'create_with_delete' decision which covers all cases including 'cleanup_old_post'
-				const shouldDelete = (result.decisionReport && result.decisionReport.decision === 'create_with_delete') ||
-					(result.lastPost && (result.reason === 'post_blocked' || result.reason === 'post_downvoted' || result.reason === 'low_engagement' || result.reason === 'post_removed_by_moderator' || result.reason === 'cleanup_old_post'));
+				// Check if deletion is required.
+				// Business rule: delete blocked/removed posts and any post whose monitoring window expired.
+				// Old-post cleanup is handled before this decision, but we keep this as a fallback.
+				const shouldDelete =
+					(result.decisionReport && result.decisionReport.decision === 'create_with_delete') ||
+					(result.reason === 'post_blocked' || result.reason === 'post_removed_by_moderator')
 
 				if (shouldDelete) {
 					bgLogger.log(`[BG] 🗑️ STEP 1: Attempting to delete last post before creating new one (Reason: ${result.reason})`)
-
-					// Special logging for cleanup_old_post scenario (after 21-minute monitoring)
-					if (result.reason === 'cleanup_old_post') {
-						bgLogger.log('[BG] 🎯 CLEANUP OLD POST: This is the automatic deletion after 21-minute monitoring period');
-						bgLogger.log('[BG] 🎯 After successful deletion, auto flow will restart automatically');
-
-						// Reload page before deletion to ensure absolute fresh state as requested
-						const cleanUsername = state.userName.replace('u/', '')
-						const submittedUrl = `https://www.reddit.com/user/${cleanUsername}/submitted/`
-						bgLogger.log(`[BG] 🔄 Pre-deletion reload of ${submittedUrl}`);
-
-						try {
-							await chrome.tabs.update(tabId, { url: submittedUrl });
-							await new Promise(resolve => setTimeout(resolve, 2000));
-						} catch (e) {
-							bgLogger.warn('[BG] Pre-deletion reload failed:', e);
-						}
-					}
 
 					state.deletingBeforeCreating = true
 
@@ -784,7 +899,7 @@ async function handleGetPostsAction(tabId, state, data) {
 				}
 			} else {
 				if (result.reason === 'monitoring_new_post') {
-					bgLogger.log('[BG] ⏳ MONITORING: Inside 21-minute window. Scheduling next check in 2 minutes.')
+					bgLogger.log('[BG] ⏳ MONITORING: Inside 20-minute window. Scheduling next check in 2 minutes.')
 
 					const TWO_MINUTES_MS = 2 * 60 * 1000;
 
@@ -851,14 +966,14 @@ async function handleGetPostsAction(tabId, state, data) {
 					const nextCheckTimeout = setTimeout(() => {
 						bgLogger.log('[BG] ⏰ MONITORING: Scheduled check triggered. Reloading and running periodic check.');
 						bgLogger.log(`[BG] 🎯 Timeout fired at: ${new Date().toLocaleTimeString()}`);
-						bgLogger.log(`[BG] 🔍 This check will determine if post is > 20 minutes old and trigger deletion + auto restart`);
+						bgLogger.log(`[BG] 🔍 This check will determine if monitoring window ended and trigger DELETE + CREATE.`);
 						// Reload page first to get fresh data
 						chrome.tabs.reload(tabId).catch((err) => {
 							bgLogger.error('[BG] ❌ Failed to reload tab:', err);
 						});
 						// Then trigger check after a short delay for page to load
 						setTimeout(() => {
-							bgLogger.log(`[BG] 💡 If post is now > 21 mins old, this should delete it and restart auto flow`);
+							bgLogger.log(`[BG] 💡 If post is now > 20 mins old, this should delete it and then create a new post`);
 							triggerPeriodicCheck(tabId, state.userName);
 						}, 2000);
 					}, nextCheckDelay);
@@ -942,13 +1057,55 @@ async function handlePostCreationCompleted(tabId, state, success, data) {
 				// Build extra fields from data passed by submit-content-script (if available)
 				const redditUrl = data?.redditUrl || null
 				const redditPostId = data?.redditPostId || null
+				const submitted = data?.submittedData || null
+				const usernameRaw = data?.username || state?.userName || null
 
 				const extraFields = {}
 				if (redditUrl) extraFields.reddit_post_url = redditUrl
 				if (redditPostId) extraFields.reddit_post_id = redditPostId
 
+				// ---- Map actual post data into Frappe DocType "Reddit Post" fields ----
+				// Only set fields we actually have (avoid overwriting backend with nulls).
+				const title = submitted?.title ?? state?.postData?.title ?? null
+				if (title) extraFields.title = title
+
+				// Frappe Select expects "Text" / "Link" (capitalized)
+				const postTypeRaw =
+					submitted?.postType ??
+					submitted?.post_type ??
+					state?.postData?.post_type ??
+					state?.postData?.postType ??
+					null
+				if (postTypeRaw) {
+					const pt = String(postTypeRaw).toLowerCase()
+					extraFields.post_type = (pt === 'link' || pt === 'url') ? 'Link' : 'Text'
+				}
+
+				const urlToShare = submitted?.url ?? state?.postData?.url ?? null
+				if (urlToShare) extraFields.url_to_share = urlToShare
+
+				const bodyText = submitted?.body ?? state?.postData?.body ?? null
+				if (bodyText) extraFields.body_text = bodyText
+
+				const hashtags = submitted?.hashtags ?? data?.hashtags ?? null
+				if (hashtags) extraFields.hashtags = hashtags
+
+				const flair = submitted?.flair ?? data?.flair ?? null
+				if (flair) extraFields.flair = flair
+
+				const subredditName = submitted?.subreddit ?? state?.postData?.subreddit ?? null
+				if (subredditName) extraFields.subreddit_name = subredditName
+
+				const account = state?.postData?.account ?? null
+				if (account) extraFields.account = account
+
+				const templateUsed = state?.postData?.template_used ?? null
+				if (templateUsed) extraFields.template_used = templateUsed
+
+				if (usernameRaw) extraFields.account_username = String(usernameRaw).replace(/^u\//i, '')
+
 				// Use client timestamp as posted_at if backend hasn't stored it yet
-				if (redditUrl || redditPostId) {
+				if (redditUrl || redditPostId || bodyText || title) {
 					// Convert to MySQL-compatible datetime format (YYYY-MM-DD HH:MM:SS)
 					const now = new Date()
 					const mysqlDateTime = now.getFullYear() + '-' +
@@ -1034,13 +1191,14 @@ async function handleDeletePostCompleted(tabId, state, success, data) {
 	bgLogger.log('[BG] Success value:', success)
 
 	const userName = state?.userName || data?.userName
+	const isOldPostQueue = state?.deletingOldPosts === true
 	bgLogger.log('[BG] Tab state:', state)
 	bgLogger.log('[BG] Username extracted:', userName)
 
 	// Clear the tab state so a fresh auto-flow can start without thinking this tab
 	// is still busy in COLLECTING_POSTS/DELETING_POST. We keep using the local
 	// `state` snapshot below, but remove the shared reference from `tabStates`.
-	if (tabStates[tabId]) {
+	if (tabStates[tabId] && !isOldPostQueue) {
 		bgLogger.log(`[BG] Clearing tab state for tab ${tabId} after delete completion`)
 		delete tabStates[tabId]
 	}
@@ -1089,6 +1247,45 @@ async function handleDeletePostCompleted(tabId, state, success, data) {
 		bgLogger.warn('[BG] ⚠️ Delete failed, but checking if we should restart anyway...')
 	}
 
+	// If we're deleting a queue of old posts, continue the queue instead of restarting.
+	if (isOldPostQueue) {
+		if (Array.isArray(state.deleteQueue) && state.deleteQueue.length > 0) {
+			// Remove the post we just attempted
+			state.deleteQueue.shift()
+		}
+
+		const trySendNextDelete = async () => {
+			while (state.deleteQueue && state.deleteQueue.length > 0) {
+				state.currentDeletePost = state.deleteQueue[0]
+				tabStates[tabId] = state
+				const sent = await sendDeletePostCommand(tabId, state.currentDeletePost)
+				if (sent) return true
+				state.deleteQueue.shift()
+			}
+			return false
+		}
+
+		const sentNext = await trySendNextDelete()
+		if (sentNext) return
+
+		// Queue finished: restart auto-flow to decide whether to create or continue monitoring
+		bgLogger.log('[BG] ✅ Old-post cleanup finished. Restarting auto-flow check.')
+		state.deletingOldPosts = false
+		state.deletingBeforeCreating = false
+		state.targetAction = 'auto_flow'
+		tabStates[tabId] = state
+
+		if (userName) {
+			await AutoFlowStateManager.clearState(userName)
+			await PostDataService.clearActiveMonitoring(userName)
+			await chrome.storage.local.remove(['latestPostsData'])
+			setTimeout(() => {
+				handleCheckUserStatus(userName, () => { })
+			}, 2000)
+		}
+		return
+	}
+
 	if (success || (state && (state.deletingBeforeCreating || state.targetAction === 'delete_and_create'))) {
 		bgLogger.log('[BG] 🔄 AUTO FLOW RESTART - Step 1: Clearing cached posts data')
 		await chrome.storage.local.remove(['latestPostsData'])
@@ -1116,7 +1313,7 @@ async function handleDeletePostCompleted(tabId, state, success, data) {
 			bgLogger.log('[BG] 🔄 AUTO FLOW RESTART - Step 4: Waiting 3 seconds for Reddit to process deletion')
 			await new Promise(resolve => setTimeout(resolve, 3000))
 
-			// RELOAD submitted page to ensure fresh data after 21-minute monitoring period
+			// RELOAD submitted page to ensure fresh data after monitoring period
 			bgLogger.log('[BG] 🔄 AUTO FLOW RESTART - Step 4.5: Reloading submitted page to fetch fresh data after monitoring period')
 			const cleanUsername = userName.replace('u/', '')
 			const submittedUrl = `https://www.reddit.com/user/${cleanUsername}/submitted/`
@@ -1171,7 +1368,7 @@ async function handleDeletePostCompleted(tabId, state, success, data) {
 export function handleGetRedditInfo(sendResponse) {
 	chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
 		const tab = tabs[0]
-		if (tab && tab.url && tab.url.includes('reddit.com')) {
+		if (tab && tab.url && tab.url.includes('reddit.com') && !isRedditChatUrl(tab.url)) {
 			sendResponse({
 				success: true,
 				data: {
@@ -1310,6 +1507,35 @@ export async function handleGetStoredUsername(sendResponse) {
 }
 
 /**
+ * Force-refresh local storage copy of username on popup open.
+ * Reads the freshest value from sync/local and rewrites local storage once.
+ */
+export async function handleRefreshStoredUsername(sendResponse) {
+	try {
+		const syncResult = await chrome.storage.sync.get(['redditUser'])
+		const localResult = await chrome.storage.local.get(['redditUser'])
+
+		const redditUser = syncResult.redditUser || localResult.redditUser
+
+		if (redditUser && redditUser.seren_name) {
+			await chrome.storage.local.set({ redditUser })
+			sendResponse({
+				success: true,
+				data: redditUser,
+				source: syncResult.redditUser ? 'sync' : 'local'
+			})
+			return
+		}
+
+		// Nothing valid found — clear stale local copy to avoid picking a wrong username
+		await chrome.storage.local.remove(['redditUser'])
+		sendResponse({ success: false, cleared: true, error: 'No username found to refresh' })
+	} catch (error) {
+		sendResponse({ success: false, error: error.message })
+	}
+}
+
+/**
  * Handle user status saved notification
  */
 export function handleUserStatusSaved(statusData, sendResponse) {
@@ -1441,7 +1667,8 @@ export async function handleCheckUserStatus(userName, sendResponse) {
 			bgLogger.log(`[BG] ⏳ User ${userName} is already being monitored. Preserving state.`);
 
 			// Try to find a Reddit tab to focus, or create one if none exist
-			const existingTabs = await chrome.tabs.query({ url: '*://*.reddit.com/*' });
+			const existingTabsAll = await chrome.tabs.query({ url: '*://*.reddit.com/*' });
+			const existingTabs = existingTabsAll.filter((t) => !isRedditChatUrl(t.url))
 			if (existingTabs.length > 0) {
 				const tabId = existingTabs[0].id;
 				chrome.tabs.update(tabId, { active: true });
@@ -1532,6 +1759,12 @@ export async function handleCloseCurrentTab(tabId, sendResponse) {
 
 	try {
 		if (tabId) {
+			const tab = await chrome.tabs.get(tabId).catch(() => null)
+			if (isRedditChatUrl(tab?.url)) {
+				bgLogger.warn(`[BG] Refusing to close protected tab (chat.reddit.com): ${tabId}`)
+				sendResponse({ success: true, skipped: true, reason: 'protected_chat_tab' })
+				return
+			}
 			await chrome.tabs.remove(tabId)
 			bgLogger.log(`[BG] Successfully closed tab ${tabId}`)
 			sendResponse({ success: true })
@@ -1706,7 +1939,8 @@ export async function handleReuseRedditTab(targetUrl, action, sendResponse) {
 	bgLogger.log(`[BG] Target URL: ${targetUrl}`)
 
 	try {
-		const existingTabs = await chrome.tabs.query({ url: '*://*.reddit.com/*' })
+		const existingTabsAll = await chrome.tabs.query({ url: '*://*.reddit.com/*' })
+		const existingTabs = existingTabsAll.filter((t) => !isRedditChatUrl(t.url))
 
 		let targetTab
 
@@ -1750,6 +1984,14 @@ export async function handleReuseRedditTab(targetUrl, action, sendResponse) {
 									bgLogger.log(`[BG] ✅ Action ${action.type} sent successfully to tab ${targetTab.id}`)
 								})
 								.catch((err) => {
+									const msg = err?.message || String(err)
+									// Benign/expected during navigation/reloads: don't treat as a hard error
+									if (msg.includes('message channel closed before a response was received') ||
+										msg.includes('Receiving end does not exist') ||
+										msg.includes('Extension context invalidated')) {
+										bgLogger.warn(`[BG] ⚠️ Action ${action.type} could not be confirmed (tab reloaded): ${msg}`)
+										return
+									}
 									bgLogger.error(`[BG] ❌ Failed to send action to tab ${targetTab.id}:`, err)
 								})
 						} catch (err) {

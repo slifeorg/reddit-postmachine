@@ -118,11 +118,88 @@ function removeBeforeUnloadListeners() {
 	contentLogger.log('Beforeunload listeners disabled')
 }
 
+function findAgeGateConfirmationButton() {
+	const candidateRoots = [
+		document.querySelector('[data-testid="age-restriction-warning-modal"]'),
+		...document.querySelectorAll('faceplate-portal'),
+		...document.querySelectorAll('[role="dialog"]')
+	].filter(Boolean)
+
+	const searchRoots = candidateRoots.length > 0 ? candidateRoots : [document.body].filter(Boolean)
+
+	for (const root of searchRoots) {
+		const buttons = root.querySelectorAll?.('button, a[role="button"]') || []
+		for (const btn of buttons) {
+			const text = (btn.innerText || btn.textContent || '')
+				.toLowerCase()
+				.replace(/\s+/g, ' ')
+				.trim()
+
+			if (!text) continue
+
+			if (
+				text.includes('over 18') ||
+				text.includes('over18') ||
+				text.includes("i am over 18") ||
+				text.includes("i'm over 18") ||
+				text.includes("i’m over 18")
+			) {
+				return btn
+			}
+		}
+	}
+
+	return null
+}
+
+function startAgeGateBypass() {
+	if (window.__rpmAgeGateObserver) return
+	if (!document.body) {
+		document.addEventListener('DOMContentLoaded', startAgeGateBypass, { once: true })
+		return
+	}
+
+	const tryDismiss = () => {
+		try {
+			const confirmBtn = findAgeGateConfirmationButton()
+			if (confirmBtn) {
+				contentLogger.log('[Content Script] Detected Reddit age gate, auto-confirming')
+				confirmBtn.click()
+				return true
+			}
+		} catch (e) {
+			contentLogger.warn('[Content Script] Age gate auto-confirm failed', e)
+		}
+		return false
+	}
+
+	// Immediate attempt in case modal is already rendered
+	tryDismiss()
+
+	// Watch for dialogs added later (SPA navigation)
+	const observer = new MutationObserver(() => {
+		tryDismiss()
+	})
+	observer.observe(document.body, { childList: true, subtree: true })
+	window.__rpmAgeGateObserver = observer
+
+	// Clean up on page navigation
+	window.addEventListener('pagehide', () => {
+		if (window.__rpmAgeGateObserver) {
+			window.__rpmAgeGateObserver.disconnect()
+			window.__rpmAgeGateObserver = null
+		}
+	})
+}
+
 function initializeRedditIntegration() {
 	contentLogger.log('Initializing Reddit integration')
 
 	// Remove Reddit's beforeunload event listeners to prevent "Leave site?" dialog
 	removeBeforeUnloadListeners()
+
+	// Auto-dismiss the mature content gate when user is already 18+
+	startAgeGateBypass()
 
 	// Notify background that we are ready immediately
 	chrome.runtime.sendMessage({
@@ -288,6 +365,7 @@ function initializeRedditIntegration() {
 
 			case 'EXTRACT_USERNAME_AND_CREATE_POST':
 				handleExtractUsernameAndCreatePost()
+				sendResponse({ started: true })
 				break
 
 			case 'CHECK_USER_STATUS':
@@ -507,6 +585,22 @@ function deepQuery(selector, root = document) {
 	return null;
 }
 
+function deepQueryAll(selector, root = document, results = []) {
+	let matches = []
+	try {
+		matches = Array.from(root.querySelectorAll(selector))
+	} catch {
+		matches = []
+	}
+	if (matches.length) results.push(...matches)
+	for (const elem of root.querySelectorAll('*')) {
+		if (elem.shadowRoot) {
+			deepQueryAll(selector, elem.shadowRoot, results)
+		}
+	}
+	return results
+}
+
 // Wait for element with timeout
 async function waitForElement(selector, timeout = 10000) {
 	const start = Date.now();
@@ -547,11 +641,19 @@ async function openUserDropdown() {
 	]
 
 	for (const selector of selectors) {
-		const avatarButton = qs(selector)
+		let avatarButton = qs(selector)
+		if (!avatarButton) {
+			avatarButton = deepQuery(selector)
+		}
 		if (avatarButton) {
 			contentLogger.log(`Found avatar button with selector: ${selector}`)
 			contentLogger.log('Avatar button element:', avatarButton)
-			avatarButton.click()
+			const shadowButton = avatarButton.shadowRoot?.querySelector('button, [role="button"]')
+			if (shadowButton) {
+				shadowButton.click()
+			} else {
+				avatarButton.click()
+			}
 			await sleep(2000)
 			return true
 		}
@@ -583,11 +685,34 @@ function cleanUsername(text) {
 	return match ? match[1] : null
 }
 
+function isPlaceholderUsername(username) {
+	if (!username) return false
+	const cleaned = String(username).replace(/^u\//i, '').trim().toLowerCase()
+	return cleaned === 'me'
+}
+
+async function fetchAuthenticatedUsernameFromApi() {
+	try {
+		const res = await fetch('https://www.reddit.com/api/v1/me', { credentials: 'include' })
+		if (!res.ok) {
+			contentLogger.log(`Reddit API /api/v1/me failed: ${res.status}`)
+			return null
+		}
+		const data = await res.json()
+		if (data?.name) {
+			return `u/${data.name}`
+		}
+	} catch (error) {
+		contentLogger.warn('Failed to fetch username from Reddit API:', error)
+	}
+	return null
+}
+
 // Strict helper to find username via "View Profile" text
 // This is the most reliable method as it targets the specific logged-in user UI component
 function findUsernameViaViewProfile() {
 	try {
-		const viewProfileSpans = Array.from(document.querySelectorAll('span')).filter(el => el.textContent === 'View Profile');
+		const viewProfileSpans = deepQueryAll('span').filter(el => el.textContent?.trim() === 'View Profile')
 		for (const span of viewProfileSpans) {
 			// Look for sibling with username
 			// Structure: parent > [span(View Profile), span(u/username)]
@@ -598,7 +723,7 @@ function findUsernameViaViewProfile() {
 
 				if (usernameSpan) {
 					const text = cleanUsername(usernameSpan.textContent);
-					if (text) {
+					if (text && !isPlaceholderUsername(text)) {
 						// Double check against parent anchor href if possible
 						const anchor = span.closest('a');
 						if (anchor && anchor.href.includes(text.replace('u/', ''))) {
@@ -612,11 +737,38 @@ function findUsernameViaViewProfile() {
 					}
 				}
 			}
+
+			const anchor = span.closest('a');
+			if (anchor && anchor.href) {
+				const urlMatch = anchor.href.match(/\/(user|u)\/([^\/]+)/);
+				if (urlMatch) {
+					const candidate = `u/${urlMatch[2]}`;
+					if (!isPlaceholderUsername(candidate)) {
+						contentLogger.log(`Found username via View Profile link: ${candidate}`);
+						return candidate;
+					}
+				}
+			}
 		}
 	} catch (e) {
 		contentLogger.warn('Error in View Profile extraction:', e);
 	}
 	return null;
+}
+
+function findUsernameFromAnyProfileLink() {
+	const anchors = deepQueryAll('a[href*="/user/"], a[href*="/u/"]')
+	for (const anchor of anchors) {
+		const href = anchor.href
+		if (!href) continue
+		const match = href.match(/\/(user|u)\/([^\/]+)/)
+		if (!match) continue
+		const candidate = `u/${match[2]}`
+		if (isPlaceholderUsername(candidate)) continue
+		contentLogger.log(`Found username via profile link: ${candidate}`)
+		return candidate
+	}
+	return null
 }
 
 // Initialize cache from storage on script load
@@ -761,19 +913,49 @@ async function extractUsernameFromPage() {
 	isExtractingUsername = true
 
 	try {
+		// Method 0: Use Reddit API if available (most reliable)
+		const apiUsername = await fetchAuthenticatedUsernameFromApi()
+		if (apiUsername && !isPlaceholderUsername(apiUsername)) {
+			contentLogger.log(`Found username via Reddit API: ${apiUsername}`)
+			await storeUsernameInStorage(apiUsername)
+			return apiUsername
+		}
+
+		const aboutApiUsername = await (async () => {
+			try {
+				const res = await fetch('https://www.reddit.com/user/me/about.json', { credentials: 'include' })
+				if (!res.ok) {
+					contentLogger.log(`Reddit API /user/me/about.json failed: ${res.status}`)
+					return null
+				}
+				const data = await res.json()
+				if (data?.data?.name) return `u/${data.data.name}`
+			} catch (error) {
+				contentLogger.warn('Failed to fetch username from /user/me/about.json:', error)
+			}
+			return null
+		})()
+		if (aboutApiUsername && !isPlaceholderUsername(aboutApiUsername)) {
+			contentLogger.log(`Found username via /user/me/about.json: ${aboutApiUsername}`)
+			await storeUsernameInStorage(aboutApiUsername)
+			return aboutApiUsername
+		}
+
 		// Method 1: Prioritize authenticated user indicators (dropdown/avatar)
 		// These show YOUR username, not just any username on the page
 		const authUsername = await getAuthenticatedUsername()
-		if (authUsername) {
+		if (authUsername && !isPlaceholderUsername(authUsername)) {
 			contentLogger.log(`Found authenticated username: ${authUsername}`)
 			await storeUsernameInStorage(authUsername)
 			return authUsername
+		} else if (authUsername) {
+			contentLogger.log(`Ignoring placeholder username from UI: ${authUsername}`)
 		}
 
 		// Method 2: Only check URL if we're on our own profile page
 		// (This requires additional validation to ensure it's our profile)
 		const urlMatch = window.location.pathname.match(/\/u\/([^\/]+)/)
-		if (urlMatch && await isOwnProfilePage(urlMatch[1])) {
+		if (urlMatch && !isPlaceholderUsername(`u/${urlMatch[1]}`) && await isOwnProfilePage(urlMatch[1])) {
 			const username = `u/${urlMatch[1]}`
 			contentLogger.log(`Found username from own profile URL: ${username}`)
 			await storeUsernameInStorage(username)
@@ -802,7 +984,7 @@ async function extractUsernameFromPage() {
 			for (const element of elements) {
 				const text = element.textContent?.trim() || element.getAttribute('aria-label') || element.href
 				const cleaned = cleanUsername(text)
-				if (cleaned) {
+				if (cleaned && !isPlaceholderUsername(cleaned)) {
 					contentLogger.log(`Found username from page element fallback: ${cleaned}`)
 					// Only store if not already cached to prevent overwriting with wrong user
 					if (!cachedUsername) {
@@ -837,10 +1019,20 @@ async function tryProfilePageFallback() {
 		const urlMatch = profileUrl.match(/\/(user|u)\/([^\/]+)/)
 		if (urlMatch) {
 			const username = `u/${urlMatch[2]}`
-			contentLogger.log(`Extracted username from profile link: ${username}`)
-			await storeUsernameInStorage(username)
-			return username
+			if (!isPlaceholderUsername(username)) {
+				contentLogger.log(`Extracted username from profile link: ${username}`)
+				await storeUsernameInStorage(username)
+				return username
+			}
+			contentLogger.log(`Ignoring placeholder profile link username: ${username}`)
 		}
+	}
+
+	// Try deep DOM scan for profile links (shadow DOM included)
+	const deepLinkUser = findUsernameFromAnyProfileLink()
+	if (deepLinkUser) {
+		await storeUsernameInStorage(deepLinkUser)
+		return deepLinkUser
 	}
 
 	// If no profile link found, try opening dropdown again with longer wait
@@ -869,6 +1061,10 @@ async function tryProfilePageFallback() {
 // Store seren_name (username) in Chrome storage
 async function storeUsernameInStorage(username) {
 	try {
+		if (isPlaceholderUsername(username)) {
+			contentLogger.warn(`Refusing to store placeholder username: ${username}`)
+			return
+		}
 		const data = {
 			seren_name: username,
 			timestamp: Date.now(),
@@ -1164,6 +1360,10 @@ async function capturePostsData(username) {
 							isRemoved: element.textContent?.includes('removed by the moderators') ||
 								element.querySelector('[icon-name="remove"]') !== null ||
 								element.getAttribute('item-state') === 'moderator_removed' || false,
+							// "blocked" is not always a first-class flag in Reddit DOM; we infer it conservatively
+							isBlocked: (element.getAttribute('item-state') === 'blocked') ||
+								(element.textContent?.toLowerCase().includes('post blocked')) ||
+								(element.querySelector('.blocked, [class*="blocked"]') !== null) || false,
 							isLocked: element.querySelector('[icon-name="lock-fill"]') !== null ||
 								element.getAttribute('item-state') === 'locked' || false,
 							isDeleted: element.textContent?.includes('deleted by the user') ||
@@ -1475,8 +1675,21 @@ window.addEventListener('message', async (event) => {
 			// 'data' here comes from dom.js checkUserPosts() and has { total, lastPostDate, posts }
 
 			// We want to store it so the Popup can read it immediately
+			const normalizeUserName = (u) => {
+				if (!u) return null
+				// Ensure "u/" prefix for consistency across background/popup
+				return u.startsWith('u/') ? u : `u/${u}`
+			}
+
+			// We don't have the original request payload here; use cached username (preferred),
+			// otherwise infer from posts data if available.
+			const inferredUserName =
+				normalizeUserName(cachedUsername) ||
+				normalizeUserName(data?.posts?.[0]?.author) ||
+				null
+
 			const storageData = {
-				userName: message.payload.userName,
+				userName: inferredUserName,
 				postsInfo: data,
 				lastUpdated: Date.now()
 			};
@@ -1622,6 +1835,10 @@ async function checkUserPosts() {
 					isRemoved: post.textContent?.includes('removed by the moderators') ||
 						post.querySelector('[icon-name="remove"]') !== null ||
 						post.getAttribute('item-state') === 'moderator_removed' || false,
+					// "blocked" is not always a first-class flag in Reddit DOM; we infer it conservatively
+					isBlocked: (post.getAttribute('item-state') === 'blocked') ||
+						(post.textContent?.toLowerCase().includes('post blocked')) ||
+						(post.querySelector('.blocked, [class*="blocked"]') !== null) || false,
 					isLocked: post.querySelector('[icon-name="lock-fill"]') !== null ||
 						post.getAttribute('item-state') === 'locked' || false,
 					isDeleted: post.textContent?.includes('deleted by the user') ||
