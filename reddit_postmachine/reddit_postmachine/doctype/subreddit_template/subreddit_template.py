@@ -4,31 +4,243 @@ from frappe.utils import strip_html
 import json
 import re
 from openai import OpenAI
-
-# Route legacy whitelisted endpoints to the v2 generator implementation.
-from reddit_postmachine.reddit_postmachine.doctype.subreddit_template import post_generator as post_generator_v2
+from .title_format import TitleFormatter, TitleFormatRequirements, sanitize_hashtag_token
 
 class SubredditTemplate(Document):
     pass
 
+
+def _safe_strip_html(val: str) -> str:
+    try:
+        return strip_html(val) if val else ""
+    except Exception:
+        return str(val) if val else ""
+
+
+def _parse_title_examples(raw: str):
+    """
+    title_example can be:
+    - plain text with one example per line
+    - a JSON list string like ["...", "..."]
+    """
+    if not raw:
+        return []
+    raw = raw.strip()
+    if not raw:
+        return []
+
+    # Try JSON list first
+    if raw.startswith("[") and raw.endswith("]"):
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                out = []
+                for x in parsed:
+                    if x is None:
+                        continue
+                    s = str(x).strip()
+                    if s:
+                        out.append(s)
+                if out:
+                    return out
+        except Exception:
+            pass
+
+    # Fallback: split lines
+    lines = []
+    for line in raw.splitlines():
+        s = line.strip().strip('"').strip("'").strip()
+        if s:
+            lines.append(s)
+    return lines
+
+
+def extract_format_from_example(example: str) -> str:
+    """
+    Attempts to convert a literal example like '26 [F4M] #Orlando - Text'
+    into a format template like '{age} [{gender_tag}] #{city} - {title_text}'.
+    """
+    if not example or "{" in example:
+        return example
+        
+    f = example
+    
+    # Identify Age (2 digits at start or near start)
+    m_age = re.search(r'\b(\d{2})\b', f)
+    if m_age:
+        # Only replace if it's the ONLY 2-digit number or clearly the age
+        f = f.replace(m_age.group(1), "{age}", 1)
+        
+    # Identify Gender Tag [F4M], [M4F], [r4r], (F4M), etc.
+    m_tag = re.search(r'[\[\(]?\b[FMTfmt]{1,3}4[FMfmAa]{1,3}\b[\]\)]?', f)
+    if m_tag:
+        tag_str = m_tag.group(0)
+        # Preserve original brackets if they existed
+        if "[" in tag_str: f = f.replace(tag_str, "[{gender_tag}]", 1)
+        elif "(" in tag_str: f = f.replace(tag_str, "({gender_tag})", 1)
+        else: f = f.replace(tag_str, "{gender_tag}", 1)
+    else:
+        # Also catch [r4r] or r4r
+        m_r4r = re.search(r'[\[\(]?\br4r\b[\]\)]?', f, flags=re.IGNORECASE)
+        if m_r4r:
+            tag_str = m_r4r.group(0)
+            if "[" in tag_str: f = f.replace(tag_str, "[{gender_tag}]", 1)
+            else: f = f.replace(tag_str, "{gender_tag}", 1)
+
+    # Identifiy City with optionally existing hash
+    # Look for known examples first to avoid greediness
+    common_ex = ['Orlando', 'Atlanta', 'Boston', 'Chicago', 'Columbus', 'Miami', 'New York', 'NYC', 'Tampa', 'Michigan', 'Detroit']
+    loc_found = False
+    for ex in common_ex:
+        m_ex = re.search(rf'(#\s*)?\b{ex}\b', f, flags=re.IGNORECASE)
+        if m_ex:
+            prefix = m_ex.group(1) or ""
+            f = f.replace(m_ex.group(0), f"{prefix}{{city}}", 1)
+            loc_found = True
+            break
+            
+    if not loc_found:
+        # Identify City with hash #City (Priority)
+        m_hash_city = re.search(r'#\s*([A-Z][a-z]+(?:[A-Z][a-z]+)*)', f)
+        if m_hash_city:
+            f = f.replace(f"#{m_hash_city.group(1)}", "#{city}", 1)
+        else:
+            # Identify obvious city/location (Capitalized word between tags/age and dash)
+            m_loc = re.search(r'(?:\{age\}|\])\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s*[-–—:]', f)
+            if m_loc:
+                f = f.replace(m_loc.group(1), "{city}", 1)
+        
+    # If there is a dash, everything after is title_text
+    if " - " in f:
+        parts = f.split(" - ", 1)
+        f = f"{parts[0]} - {{title_text}}"
+    elif " – " in f: # en dash
+        parts = f.split(" – ", 1)
+        f = f"{parts[0]} – {{title_text}}"
+    elif " : " in f:
+        parts = f.split(" : ", 1)
+        f = f"{parts[0]} : {{title_text}}"
+    
+    return f
+    
+    return f
+    
+    return f
+
+
+def _render_title_format(fmt: str, context: dict) -> str:
+    """
+    Render a title format using TitleFormatter.
+    """
+    if not fmt:
+        return ""
+
+    # Prepare data for TitleFormatter
+    # context usually contains: final_age, gender, final_location, city, location, etc.
+    
+    # city_full / location_full are plain names
+    city_full = context.get("city_full") or context.get("final_location") or context.get("city") or context.get("location") or ""
+    location_full = context.get("location_full") or context.get("final_location") or context.get("location") or context.get("city") or ""
+    
+    # city / location in hashtag context (sanitized)
+    city_hashtag = sanitize_hashtag_token(city_full)
+    location_hashtag = sanitize_hashtag_token(location_full)
+    
+    # gender_tag handled by caller or default
+    gender_tag = context.get("gender") or "M"
+    
+    rendered = TitleFormatter.render(
+        fmt,
+        age=str(context.get("final_age") or context.get("age") or ""),
+        gender_tag=gender_tag,
+        city=city_hashtag,
+        city_full=city_full,
+        location=location_hashtag,
+        location_full=location_full,
+        title_text=context.get("title_text", "{title_text}") # Keep placeholder if not provided yet
+    )
+    
+    return rendered
+
+
+def _build_strict_title(template, rules: str, context: dict, logs: list):
+    """
+    Priority:
+    1) template.title_format (strictest)
+    2) first line/example from template.title_example
+    3) None (caller can fallback to AI title)
+    """
+    # title_format may exist in DB even if the doctype JSON in repo doesn't include it yet.
+    title_format_raw = _safe_strip_html(getattr(template, "title_format", "") or "")
+    if title_format_raw:
+        strict = _render_title_format(title_format_raw, context)
+        safe_log_append(logs, f"Strict title built from title_format: {strict[:120]}")
+        return strict
+
+    title_example_raw = _safe_strip_html(getattr(template, "title_example", "") or "")
+    examples = _parse_title_examples(title_example_raw)
+    if examples:
+        # Try to infer format from literal example if no placeholders present
+        fmt = extract_format_from_example(examples[0])
+        strict = _render_title_format(fmt, context)
+        safe_log_append(logs, f"Strict title built from first title_example (inferred fmt: {fmt}): {strict[:120]}")
+        return strict
+
+    # Fallback: sometimes rules contains "Title: ...."
+    try:
+        m_title = re.search(r'(?im)^\s*title\s*:\s*(.+)\s*$', rules or "")
+        if m_title:
+            strict = _render_title_format(_safe_strip_html(m_title.group(1) or ""), context)
+            if strict:
+                safe_log_append(logs, f"Strict title built from rules Title: line: {strict[:120]}")
+                return strict
+    except Exception:
+        pass
+
+    return None
+
 def extract_location_from_subreddit(subreddit_name):
     """
     Витягує назву міста/локації з назви сабредіту.
-    Приклади: r/albany -> Albany, r/Ohior4r -> Ohio, r/newhaven -> New Haven, r/newyork -> New York
+    Покращена версія: коректно обробляє NJ_Lifestyle, Floridar4r, OrlandoSex
     """
     if not subreddit_name:
         return None
     
-    # Прибираємо префікс r/ якщо є
-    sub = subreddit_name.replace("r/", "").replace("R/", "").strip()
-    # Видаляємо суфікси типу r4r, personals тощо
-    sub = re.sub(r'(r4r|personals|meetup|dating|hookup)$', '', sub, flags=re.IGNORECASE)
-    sub = sub.strip()
+    # 1. Strip r/ prefix
+    sub = re.sub(r'^r/', '', subreddit_name, flags=re.IGNORECASE).strip()
     
+    # 2. Strip trailing noise (digits, underscores, etc.) repeatedly
+    while sub and (sub[-1].isdigit() or sub[-1] in '_- '):
+        sub = sub[:-1]
+    
+    # 3. Strip common suffixes - INCLUDING middle patterns like "r4r"
+    suffixes = [
+        'r4r', 'personals', 'meetups?', 'meetings?', 'dating', 'hookups?', 'hookup', 'sex', 'gw', 
+        'gonewild', 'hotties', 'sluts', 'baddies', 'nsfw', 'casual', 'singles', 
+        'only', 'encounters', 'personals', 'girls', 'boys', 'milf', 'hotties',
+        'lifestyle', 'dirty', 'naughty', 'kinky', 'adult', 'xxx'
+    ]
+    
+    # Create pattern that matches suffixes at the end OR preceded by underscore/hyphen
+    suffix_pattern = re.compile(f"([_-])?({'|'.join(suffixes)})$", re.IGNORECASE)
+    
+    # Repeatedly strip suffixes
+    max_iterations = 10
+    iteration = 0
+    while iteration < max_iterations:
+        new_sub = suffix_pattern.sub('', sub).strip()
+        if new_sub == sub or not new_sub:
+            break
+        sub = new_sub
+        # Re-strip trailing noise
+        while sub and sub[-1] in '_- ':
+            sub = sub[:-1]
+        iteration += 1
+
     if not sub:
         return None
     
-    # Список відомих міст для правильного розділення
     known_cities = {
         "newhaven": "New Haven",
         "newyork": "New York",
@@ -37,48 +249,56 @@ def extract_location_from_subreddit(subreddit_name):
         "newjersey": "New Jersey",
         "northcarolina": "North Carolina",
         "southcarolina": "South Carolina",
+        "nyc": "NYC",
+        "ct": "CT",
+        "nj": "NJ",
+        "va": "VA",
+        "md": "MD",
+        "ga": "GA",
+        "tx": "Texas",
+        "ca": "California",
+        "mi": "Michigan",
+        "fl": "Florida",
+        "fla": "Florida",
     }
     
-    # Перевіряємо, чи це відоме місто
     sub_lower = sub.lower()
     if sub_lower in known_cities:
         return known_cities[sub_lower]
     
-    # Розділяємо camelCase або слова з великої літери
-    words = re.findall(r'[A-Z]?[a-z]+|[A-Z]+(?=[A-Z]|$)', sub)
+    # Splitting into words by camel case and punctuation
+    sub_for_split = sub.replace('_', ' ').replace('-', ' ').strip()
+    words = re.findall(r'[A-Z]?[a-z]+|[A-Z]+(?=[A-Z\s]|$)', sub_for_split)
     
-    if words and len(words) > 1:
-        # Об'єднуємо слова з правильною капіталізацією
-        location = ' '.join(word.capitalize() for word in words)
-        return location
+    if words:
+        raw_combined = "".join(words).upper()
+        if raw_combined in ["NYC", "CT", "NJ", "VA", "MD", "GA", "TX", "CA", "MI", "FL"]:
+            return raw_combined
+            
+        if len(words) > 1:
+            return ' '.join(word.capitalize() for word in words)
     
-    # Якщо всі літери малі і це одне слово, намагаємося знайти розділення
-    # (наприклад, "newhaven" -> "New Haven")
     if sub.islower() and len(sub) > 4:
-        # Шукаємо патерни типу "new" + "haven", "los" + "angeles" тощо
-        # Простий підхід: розділяємо на слова по довжині
-        # Якщо слово довше 6 символів, намагаємося розділити
-        if len(sub) <= 6:
+        if len(sub) <= 7:
             return sub.capitalize()
         else:
-            # Спробуємо розділити на дві частини (перші 3-4 символи + решта)
-            # Це працює для багатьох міст типу "newhaven", "newyork" тощо
-            mid_point = len(sub) // 2
-            # Шукаємо найкращу точку розділення (найближчу до середини, але не менше 3 символів)
-            for i in range(max(3, mid_point - 2), min(len(sub) - 2, mid_point + 3)):
-                part1 = sub[:i].capitalize()
-                part2 = sub[i:].capitalize()
-                # Перевіряємо, чи виглядає як розумне розділення
-                if len(part1) >= 3 and len(part2) >= 3:
-                    return f"{part1} {part2}"
+            # Better CamelCase detection for lowercase strings
+            # Try to find known multi-word patterns
+            known_parts = ["newyork", "sanfrancisco", "losangeles", "northcarolina", "southcarolina", "westvirginia"]
+            for kp in known_parts:
+                if kp in sub.lower():
+                    # This is just an example, the real logic should be more robust
+                    pass
+            return sub.capitalize()
     
-    # Якщо не вдалося розділити, просто капіталізуємо першу літеру
-    return sub.capitalize()
+    final_sub = sub.strip()
+    if final_sub.upper() in ["NYC", "CT", "NJ", "VA", "MD", "GA", "TX", "CA", "MI", "FL"]:
+        return final_sub.upper()
+
+    return final_sub.capitalize()
 
 def log_error_safe(title, logs, err):
     """Log error without raising secondary errors. Completely skip logging to avoid cascading errors."""
-    # Do nothing - we don't want to risk cascading errors from frappe.log_error
-    # The original error will still be raised and handled by the caller
     pass
 
 def safe_log_append(logs, message):
@@ -90,17 +310,10 @@ def safe_log_append(logs, message):
         pass  # Ignore any errors
 
 @frappe.whitelist()
-def generate_post_from_template(template_name, account_name=None, agent_name=None, account_info=None):
+def generate_post_from_template(template_name, account_name=None, agent_name=None):
     """
     Генерує та створює новий документ Reddit Post (викликається з кнопки на шаблоні або через API)
     """
-    # Delegate to v2 generator (keeps backward-compatible signature).
-    return post_generator_v2.generate_post_from_template(
-        template_name=template_name,
-        account_name=account_name,
-        agent_name=agent_name,
-        account_info=account_info,
-    )
     # Ініціалізуємо logs як список
     logs = []
     
@@ -148,11 +361,7 @@ def generate_post_from_template(template_name, account_name=None, agent_name=Non
             if not account_value:
                 frappe.throw("No Reddit Account found in system to assign to this post.")
             account_doc = frappe.get_doc("Reddit Account", account_value)
-            #frappe.throw(f"Account doc: {account_doc}")
-        
-        # ВАЖЛИВО: Встановлюємо дефолтні значення ОДРАЗУ після отримання account_doc
-        # Це запобігає помилкам AttributeError при зверненні до неіснуючих полів
-        # Включаємо posting_style, щоб уникнути помилок при серіалізації об'єкта Frappe
+    
         for _field in ("account_description", "posting_style", "assistant_name", "assistant_age", 
                       "assistant_profession", "assistant_location", "custom_prompt_instructions", 
                       "status", "is_posting_paused", "username"):
@@ -172,42 +381,24 @@ def generate_post_from_template(template_name, account_name=None, agent_name=Non
             frappe.throw(f"Account '{account_name_str}' is inactive or paused.")
         
         if account_name:
-            safe_log_append(logs, f"Account fixed by input: {account_doc.name} {account_info}")
+            safe_log_append(logs, f"Account fixed by input: {account_doc.name}")
         else:
             safe_log_append(logs, f"Account auto-selected: {account_doc.name}")
         
         # Безпечно отримуємо username
         account_username = account_doc.username
 
-        # 4. Підготовка промпта (User Message)
-        instructions = strip_html(template.prompt) if template.prompt else "Create viral content."
-        rules = strip_html(template.rules) if template.rules else "No specific rules."
-        exclusions = template.body_exclusion_words if template.body_exclusion_words else ""
-        
-        # 4.1 Підготовка інформації про агента/персону
-        # Безпечно отримуємо всі значення з перевіркою типів
-        # Використовуємо прямий доступ до полів з перевіркою
-        # 4.1 Підготовка інформації про агента/персону
-        
-        # ЗМІНЕНА ЛОГІКА: Спочатку шукаємо "людське" ім'я в налаштуваннях акаунту
-        agent_display_name = ""
-        
-        # 1. ПЕРШИЙ ПРІОРИТЕТ: Поле "assistant_name" в документі акаунту (Katalina)
-        if hasattr(account_doc, "assistant_name") and account_doc.assistant_name:
-            agent_display_name = str(account_doc.assistant_name).strip()
-            
-        # 2. ДРУГИЙ ПРІОРИТЕТ: Аргумент функції, якщо в базі пусто (BleedingHeart_108)
-        if not agent_display_name and agent_name:
-            agent_display_name = agent_name
-            
-        # 3. ТРЕТІЙ ПРІОРИТЕТ: Username акаунту, якщо все інше пусто
+        # 4. Agent Data Extraction
+        agent_display_name = agent_name
         if not agent_display_name:
-            agent_display_name = account_username or "Unknown"
-            
-        if not isinstance(agent_display_name, str):
-            agent_display_name = str(agent_display_name)
+            if hasattr(account_doc, "assistant_name") and account_doc.assistant_name:
+                agent_display_name = str(account_doc.assistant_name).strip()
+            else:
+                agent_display_name = account_username or "Unknown"
         
-        # Читаємо age
+        if not agent_display_name or not isinstance(agent_display_name, str):
+            agent_display_name = str(account_username) if account_username else "Unknown"
+        
         agent_age = None
         if hasattr(account_doc, "assistant_age") and account_doc.assistant_age is not None:
             try:
@@ -215,17 +406,14 @@ def generate_post_from_template(template_name, account_name=None, agent_name=Non
             except (ValueError, TypeError):
                 agent_age = None
         
-        # Читаємо profession
         agent_profession = ""
         if hasattr(account_doc, "assistant_profession") and account_doc.assistant_profession:
             agent_profession = str(account_doc.assistant_profession).strip()
         
-        # Читаємо location
         agent_location_raw = ""
         if hasattr(account_doc, "assistant_location") and account_doc.assistant_location:
             agent_location_raw = str(account_doc.assistant_location).strip()
         
-        # Читаємо custom instructions
         custom_instructions_raw = ""
         if hasattr(account_doc, "custom_prompt_instructions") and account_doc.custom_prompt_instructions:
             custom_instructions_raw = str(account_doc.custom_prompt_instructions).strip()
@@ -235,260 +423,111 @@ def generate_post_from_template(template_name, account_name=None, agent_name=Non
         except Exception:
             agent_custom_instructions = str(custom_instructions_raw) if custom_instructions_raw else ""
         
-        # Логуємо прочитані дані для дебагу
-        safe_log_append(logs, f"Raw agent data from DB - assistant_name: {getattr(account_doc, 'assistant_name', 'NOT FOUND')}, assistant_age: {getattr(account_doc, 'assistant_age', 'NOT FOUND')}, assistant_profession: {getattr(account_doc, 'assistant_profession', 'NOT FOUND')}, assistant_location: {getattr(account_doc, 'assistant_location', 'NOT FOUND')}")
-        
-        # Визначення локації: якщо "dynamic", витягуємо з назви сабредіту
         agent_location = None
-        # Безпечна перевірка на "dynamic" - переконуємося, що agent_location_raw є рядком
         if agent_location_raw and isinstance(agent_location_raw, str) and agent_location_raw.lower() == "dynamic":
             agent_location = extract_location_from_subreddit(template.sub)
             safe_log_append(logs, f"Location extracted from subreddit '{template.sub}': {agent_location}")
         elif agent_location_raw:
-            agent_location = str(agent_location_raw)  # Переконуємося, що це рядок
+            agent_location = str(agent_location_raw)  
         
-        # Логування даних агента для дебагу (безпечно)
-        safe_log_append(logs, f"Agent data - Name: {agent_display_name}, Age: {agent_age}, Profession: {agent_profession}, Location: {agent_location}")
-        
-        # Формуємо блок інформації про агента для instructions
-        agent_info_lines = []
-        
-        # Безпечно додаємо інформацію про агента
-        try:
-            # Переконуємося, що всі змінні є рядками або мають значення за замовчуванням
-            # Використовуємо безпечні методи для отримання значень
-            try:
-                safe_display_name = str(agent_display_name) if agent_display_name is not None else "Unknown"
-            except (AttributeError, TypeError):
-                safe_display_name = "Unknown"
-            
-            try:
-                safe_profession = str(agent_profession) if agent_profession is not None and agent_profession else ""
-            except (AttributeError, TypeError):
-                safe_profession = ""
-            
-            try:
-                safe_location = str(agent_location) if agent_location is not None else ""
-            except (AttributeError, TypeError):
-                safe_location = ""
-            
-            try:
-                safe_custom_instructions = str(agent_custom_instructions) if agent_custom_instructions is not None and agent_custom_instructions else ""
-            except (AttributeError, TypeError):
-                safe_custom_instructions = ""
-            
-            # Переконуємося, що agent_info_lines є списком
-            if not isinstance(agent_info_lines, list):
-                agent_info_lines = []
-            
-            agent_info_lines.append(f"Agent/Persona Name: {safe_display_name}")
-            
-            if agent_age:
-                agent_info_lines.append(f"Age: {agent_age}")
-            else:
-                agent_info_lines.append("Age: [MUST INVENT A SPECIFIC AGE - use a number like 25, 30, 28, etc. NOT [Age] or placeholder]")
-            
-            if safe_profession:
-                agent_info_lines.append(f"Profession/Hobby: {safe_profession}")
-            else:
-                agent_info_lines.append("Profession/Hobby: [MUST INVENT A SPECIFIC PROFESSION/HOBBY - use real text like 'software developer', 'yoga instructor', 'photographer', etc. NOT [Profession] or placeholder]")
-            
-            if safe_location:
-                agent_info_lines.append(f"Location/City: {safe_location}")
-            else:
-                agent_info_lines.append("Location/City: [MUST INVENT A SPECIFIC CITY NAME - use real city name, NOT [City] or placeholder]")
-            
-            if safe_custom_instructions:
-                agent_info_lines.append(f"Custom Instructions: {safe_custom_instructions}")
-        except Exception as e:
-            # Якщо виникла помилка, створюємо базовий список з мінімальною інформацією
-            agent_info_lines = []
-            try:
-                agent_info_lines.append(f"Agent/Persona Name: {str(agent_display_name) if agent_display_name else 'Unknown'}")
-            except Exception:
-                agent_info_lines.append("Agent/Persona Name: Unknown")
-            
-            try:
-                agent_info_lines.append(f"Age: {str(agent_age) if agent_age else 'Not specified'}")
-            except Exception:
-                agent_info_lines.append("Age: Not specified")
-            
-            try:
-                agent_info_lines.append(f"Profession/Hobby: {str(agent_profession) if agent_profession else 'Not specified'}")
-            except Exception:
-                agent_info_lines.append("Profession/Hobby: Not specified")
-            
-            try:
-                agent_info_lines.append(f"Location/City: {str(agent_location) if agent_location else 'Not specified'}")
-            except Exception:
-                agent_info_lines.append("Location/City: Not specified")
-            
-            if agent_custom_instructions:
-                try:
-                    agent_info_lines.append(f"Custom Instructions: {str(agent_custom_instructions)}")
-                except Exception:
-                    pass  # Ігноруємо помилки додавання custom instructions
-        
-        # Переконуємося, що agent_info_lines є списком і не порожній
-        if not isinstance(agent_info_lines, list) or len(agent_info_lines) == 0:
-            agent_info_lines = ["Agent information not available"]
-        
-        agent_info_block = "\n".join(agent_info_lines)
-        # гарантуємо, що instructions — рядок
-        if instructions is None:
-            instructions = ""
-        
-        # Логуємо інформацію про агента для дебагу
-        safe_log_append(logs, f"Agent info block: {agent_info_block}")
-        safe_log_append(logs, f"Agent location (raw): {agent_location_raw}, Agent location (final): {agent_location}")
-        safe_log_append(logs, f"Agent age: {agent_age}, Agent profession: {agent_profession}")
-        
-        # Додаємо інформацію про агента до instructions з чіткими інструкціями
-        # Визначаємо тип поста на основі назви сабредіту
-        subreddit_lower = template.sub.lower()
-        is_r4r = "r4r" in subreddit_lower or "personals" in subreddit_lower
-        
-        post_type_context = ""
-        if is_r4r:
-            post_type_context = "\n\nPOST TYPE: This is an R4R (Redditor 4 Redditor) personal ad post. It MUST include:\n- Your age (use the exact age from AGENT/PERSONA INFORMATION)\n- Your gender/identity\n- What you're looking for (friendship, dating, hookup, etc.)\n- Your location/city (use the exact location from AGENT/PERSONA INFORMATION)\n- Your interests/hobbies (use profession/hobby from AGENT/PERSONA INFORMATION)\n- Your availability\n- Your boundaries/preferences\n\nThis is a PERSONAL AD, not a general discussion post."
-        
-        instructions = f"""{instructions}
+        final_age = str(agent_age) if agent_age is not None else "28"
+        final_location = str(agent_location) if agent_location else "New Haven"
+        final_profession = str(agent_profession) if agent_profession else "photographer"
+        final_name = str(agent_display_name) if agent_display_name else (str(account_username) if account_username else "Unknown")
 
-AGENT/PERSONA INFORMATION (USE THESE EXACT VALUES IN THE POST):
-{agent_info_block}
-{post_type_context}
-
-CRITICAL REQUIREMENTS:
-1. You MUST use the actual values provided in AGENT/PERSONA INFORMATION above
-2. If a value says "[MUST INVENT...]", you must create a specific, realistic value (like "25" for age, "Miami" for city, "photographer" for profession)
-3. NEVER use bracketed placeholders like [Age], [Gender], [City], [Location], [Type of Relationship], [Type of Connection], [insert interests], etc. in the final post
-4. Always write natural, complete sentences with real values
-5. The post must reflect the persona described above - use their age, location, profession/hobby in the content
-6. Make it personal and authentic - write as if you ARE this person"""
-        
-        # 4.2 Підготовка контексту акаунту (System Message Context)
-        # Формуємо явні значення для заміни
-        final_age = str(agent_age) if agent_age else "28"
-        final_location = agent_location if agent_location else "New Haven"
-        final_profession = agent_profession if agent_profession else "photographer"
-        final_name = agent_display_name if agent_display_name else account_username
-        
-        system_content = f"""You are a Reddit expert creating posts for r/{template.sub} (Group: {template.group}).
-
-You are writing AS the persona described below. You must embody this character completely.
-
-IDENTITY CONTEXT:
-- Reddit username: {account_username}
-- Persona/Character name: {final_name}"""
-        
-        if agent_age:
-            system_content += f"\n- Character age: {agent_age} years old"
-        else:
-            system_content += f"\n- Character age: {final_age} years old (use this exact value)"
-        
-        if agent_profession:
-            system_content += f"\n- Character profession/hobby: {agent_profession}"
-        else:
-            system_content += f"\n- Character profession/hobby: {final_profession} (use this exact value)"
-        
-        if agent_location:
-            system_content += f"\n- Character location/city: {agent_location}"
-        else:
-            system_content += f"\n- Character location/city: {final_location} (use this exact value)"
-        
+        agent_info_block = f"Name: {final_name}\nAge: {final_age}\nProfession: {final_profession}\nLocation: {final_location}"
         if agent_custom_instructions:
-            system_content += f"\n- Custom writing instructions: {agent_custom_instructions}"
+            agent_info_block += f"\nCustom Instructions: {agent_custom_instructions}"
+
+        subreddit_lower = template.sub.lower()
+        r4r_keywords = ["r4r", "personals", "gone wild", "gonewild", "gw", "nsfw", "hookup", "dating", "meetup", "casual"]
+        is_r4r = any(k in subreddit_lower for k in r4r_keywords) or any(k in (template.group or "").lower() for k in r4r_keywords)
+        location_hashtag = sanitize_hashtag_token(final_location)
+
+        # 5. Gender Inference
+        inferred_gender = "F"
+        full_gender_tag = "F4M"
+        try:
+            hint_src = f"{template.title_format or ''} {template.title_example or ''} {template.title_prompt or ''}"
+            m = re.search(r'\[?([FMfm])4([FMfmAa])\]?', hint_src)
+            if m:
+                inferred_gender = m.group(1).upper()
+                full_gender_tag = f"{inferred_gender}4{m.group(2).upper()}"
+            else:
+                m2 = re.search(r'\[([FMfm])\]', hint_src)
+                if m2:
+                    inferred_gender = m2.group(1).upper()
+                    full_gender_tag = inferred_gender
+        except Exception: pass
         
-        system_content += f"""
+        gender_tag = full_gender_tag if (is_r4r or "4" in full_gender_tag) else inferred_gender
 
-CRITICAL RULES - VIOLATION WILL RESULT IN REJECTION:
-1. NEVER use ANY text in square brackets [like this] in the title or content
-2. NEVER use placeholders like [Age], [Gender], [City], [Location], [Connection Type], [describe interests], [list limits], [mention availability]
-3. ALWAYS use REAL VALUES from the IDENTITY CONTEXT above
-4. If age is "{final_age}", write "{final_age}" - NOT "[Age]" or "[age]"
-5. If location is "{final_location}", write "{final_location}" - NOT "[City]" or "[City name]"
-6. If profession is "{final_profession}", write "{final_profession}" - NOT "[Profession]" or "[specific interests]"
-7. Write complete, natural sentences with ACTUAL information - no brackets, no placeholders, no templates
+        def pre_replace(text):
+            if not text: return ""
+            t = str(text).replace("{age}", final_age).replace("[age]", final_age).replace("[Age]", final_age)
+            t = t.replace("{city}", final_location).replace("[city]", final_location).replace("[City]", final_location)
+            t = t.replace("#{city}", f"#{location_hashtag}").replace("{gender_tag}", gender_tag).replace("[gender]", gender_tag).replace("[Gender]", gender_tag)
+            return t
 
-IMPORTANT: Write the post AS THIS PERSON. Use their exact age ({final_age}), location ({final_location}), and profession/hobby ({final_profession}). Make it authentic and personal."""
-            
-        safe_log_append(logs, "Prompt prepared: Account and agent info added to System message and instructions")
+        instructions = pre_replace(_safe_strip_html(template.prompt) or "Create viral content.")
+        rules = pre_replace(_safe_strip_html(template.rules) or "No specific rules.")
+        exclusions = pre_replace(template.body_exclusion_words or "")
 
-        # 5. JSON Schema
+        # 6. Writing Rules
+        try:
+            bracket_hint = f"{template.title_prompt or ''}\n{template.title_example or ''}\n{rules}".strip()
+            allow_brackets = bool(re.search(r'\[[^\]]+\]', bracket_hint)) or is_r4r
+        except Exception:
+            allow_brackets = bool(is_r4r)
+        
+        bracket_rule = "Square brackets [] are ONLY allowed for gender tags (e.g. [F4M]). NEVER use placeholder brackets." if allow_brackets else "NEVER use square brackets [like this] in the post."
+
+        title_ctx = {
+            "final_age": final_age, "age": final_age,
+            "final_location": final_location, "location": final_location, "city": final_location,
+            "final_profession": final_profession, "profession": final_profession,
+            "name": final_name, "gender": gender_tag, "subreddit": template.sub,
+        }
+
+        strict_title = _build_strict_title(template, rules, title_ctx, logs)
+        if is_r4r and not strict_title:
+            strict_title = f"{final_age} [{gender_tag}] #{location_hashtag} - {{title_text}}"
+
+        dynamic_example = ""
+        if strict_title:
+            dynamic_example = strict_title.replace("{title_text}", "Looking for connection")
+            for k, v in title_ctx.items():
+                if isinstance(v, str): dynamic_example = dynamic_example.replace(f"{{{k}}}", v)
+        else:
+            dynamic_example = f"{final_age} [{gender_tag}] #{location_hashtag} - Looking for connection"
+
+        system_content = f"Expert Reddit Post Assistant. Embody persona:\n{agent_info_block}\nRULE: {bracket_rule}\nWrite natural sentences, NO placeholders."
+        
+        fixed_title_hint = ""
+        if strict_title:
+            if "{title_text}" in strict_title:
+                fixed_title_hint = f"\nREQUIRED FORMAT: {strict_title}\nONLY generate content for the {{title_text}} part."
+            else:
+                fixed_title_hint = f"\nUSE EXACT TITLE: {strict_title}"
+
+        user_message_content = f"Generate post for r/{template.sub}:\n\nPROMPT: {instructions}\nRULES: {rules}\n{fixed_title_hint}\n\nEXAMPLE CORRECT TITLE: \"{dynamic_example}\"\nWrite now."
+
         json_schema = {
             "name": "reddit_post_response",
             "strict": True,
             "schema": {
                 "type": "object",
                 "properties": {
-                    "title": { "type": "string", "description": "Engaging title" },
+                    "title": { "type": "string", "description": "Title" },
                     "post_type": { "type": "string", "enum": ["Text", "Link"] },
-                    "url_to_share": { "type": "string", "description": "URL if Link type, else empty" },
-                    "content": { "type": "string", "description": "Body text" },
-                    "hashtags": { "type": "string", "description": "Relevant hashtags" }
+                    "url_to_share": { "type": "string", "description": "URL" },
+                    "content": { "type": "string", "description": "Body" },
+                    "hashtags": { "type": "string", "description": "Hashtags" }
                 },
                 "required": ["title", "post_type", "url_to_share", "content", "hashtags"],
                 "additionalProperties": False
             }
         }
-
-        # 6. Запит до AI
-        safe_log_append(logs, "Sending request to OpenAI")
-        
-        # Формуємо детальний user message з явними прикладами та few-shot examples
-        # Використовуємо вже визначені final_age, final_location, final_profession, final_name
-        
-        user_message_content = f"""Generate a Reddit post for r/{template.sub} with the following requirements:
-
-Account username: {account_username or 'Unknown'}
-
-PROMPT/TEMPLATE INSTRUCTIONS:
-{instructions}
-
-RULES TO FOLLOW:
-{rules}
-
-WORDS TO AVOID:
-{exclusions}
-
-ABSOLUTE REQUIREMENTS - VIOLATION WILL RESULT IN REJECTION:
-
-1. FORBIDDEN: Any text in square brackets [like this] is ABSOLUTELY FORBIDDEN in title or content.
-   - NEVER write: [Age], [Gender], [City], [Location], [Connection Type], [describe interests], [list limits], [mention availability]
-   - NEVER write: [age], [gender], [city], [City name], [Kind of Connection], [specific interests]
-   - NEVER write: ANY text between square brackets
-
-2. REQUIRED VALUES TO USE:
-   - Age: Use "{final_age}" (exactly this value, NOT "[Age]" or "[age]")
-   - Location: Use "{final_location}" (exactly this value, NOT "[City]" or "[City name]")
-   - Profession/Hobby: Use "{final_profession}" (exactly this value, NOT "[Profession]" or "[specific interests]")
-   - Name: Use "{final_name}" (exactly this value)
-
-3. EXAMPLES OF CORRECT vs INCORRECT:
-   CORRECT TITLE: "{final_age}M looking for friendship in {final_location}"
-   INCORRECT TITLE: "[Gender][Age] Searching for [Kind of Connection] Nearby [City name]"
-   
-   CORRECT CONTENT: "Hey! I'm {final_name}, a {final_age}-year-old {final_profession} based in {final_location}."
-   INCORRECT CONTENT: "Hey! I'm a [age] [gender] looking to connect..."
-   
-   CORRECT: "I'm a {final_profession} who loves hiking and coffee shops"
-   INCORRECT: "I'm into [specific interests]"
-   
-   CORRECT: "Available evenings and weekends"
-   INCORRECT: "[mention your availability]"
-
-4. Write natural, complete sentences with REAL information - no brackets, no placeholders, no templates.
-
-5. The title and body must be READY TO POST IMMEDIATELY - no editing needed, no placeholders to fill.
-
-6. Use the EXACT values specified above:
-   - Age: "{final_age}" (write this number, not "[Age]")
-   - Location: "{final_location}" (write this city name, not "[City]")
-   - Profession: "{final_profession}" (write this profession, not "[Profession]")
-
-7. Make it personal and authentic - write as if you ARE this person ({final_name}), using their exact details.
-
-REMEMBER: If you use ANY square brackets [like this] in your response, it will be REJECTED. Write ONLY real values, no placeholders."""
         
         completion = client.chat.completions.create(
             model="gpt-4o-2024-08-06",
@@ -508,197 +547,287 @@ REMEMBER: If you use ANY square brackets [like this] in your response, it will b
             }
         )
 
-        # Безпечно парсимо відповідь від OpenAI
+        if not completion or not completion.choices or len(completion.choices) == 0:
+            frappe.throw("No response from OpenAI")
+        
+        response_content = completion.choices[0].message.content
+        if not response_content:
+            frappe.throw("Empty response from OpenAI")
+        
+        # Validate response is not corrupted before parsing
+        def is_corrupted_text(text):
+            """Detect obviously corrupted text with random character sequences"""
+            if not text or len(text) < 20:
+                return False
+            # Check for excessive punctuation or random character patterns
+            punct_ratio = len([c for c in text if not c.isalnum() and not c.isspace()]) / len(text)
+            if punct_ratio > 0.4:  # More than 40% non-alphanumeric
+                return True
+            # Check for random character sequences (low vowel ratio)
+            alpha_chars = [c for c in text.lower() if c.isalpha()]
+            if alpha_chars:
+                vowel_ratio = len([c for c in alpha_chars if c in 'aeiou']) / len(alpha_chars)
+                if vowel_ratio < 0.15:  # Less than 15% vowels suggests corruption
+                    return True
+            return False
+        
+        if is_corrupted_text(response_content):
+            safe_log_append(logs, f"ERROR: Detected corrupted OpenAI response: {response_content[:200]}")
+            frappe.throw("OpenAI returned corrupted response. Please try again.")
+        
         try:
-            response_content = completion.choices[0].message.content
-            if not response_content:
-                frappe.throw("Empty response from OpenAI")
             ai_response = json.loads(response_content)
-            if not isinstance(ai_response, dict):
-                frappe.throw("Invalid response format from OpenAI")
-        except (json.JSONDecodeError, KeyError, AttributeError) as e:
-            frappe.throw(f"Failed to parse OpenAI response: {str(e)}")
+        except json.JSONDecodeError as e:
+            safe_log_append(logs, f"JSON Parse Error: {str(e)}")
+            safe_log_append(logs, f"Response preview: {response_content[:500]}")
+            frappe.throw(f"Invalid JSON response from OpenAI: {str(e)}")
         
-        safe_log_append(logs, "OpenAI response received")
+        if not isinstance(ai_response, dict):
+            frappe.throw("Invalid response format from OpenAI")
         
-        # Валідація та автоматична заміна плейсхолдерів
-        # Безпечно отримуємо title та content з перевірками
-        title = ai_response.get("title") if ai_response else None
-        content = ai_response.get("content") if ai_response else None
+        # Validate individual fields for corruption
+        for field in ['title', 'content']:
+            if field in ai_response and is_corrupted_text(ai_response.get(field, "")):
+                safe_log_append(logs, f"ERROR: Corrupted {field}: {ai_response[field][:200]}")
+                frappe.throw(f"OpenAI returned corrupted {field}. Please try again.")
         
-        # Переконуємося, що title та content є рядками
-        if title is None:
-            title = ""
+        safe_log_append(logs, "OpenAI response received and validated")
+        
+        title = ai_response.get("title", "") or ""
+        content = ai_response.get("content", "") or ""
+        
         if not isinstance(title, str):
             title = str(title) if title else ""
-        
-        if content is None:
-            content = ""
         if not isinstance(content, str):
             content = str(content) if content else ""
         
-        # Автоматична заміна плейсхолдерів
-        import re
-        
-        # Переконуємося, що final_age, final_location, final_profession є рядками
         safe_final_age = str(final_age) if final_age else "28"
         safe_final_location = str(final_location) if final_location else "New Haven"
         safe_final_profession = str(final_profession) if final_profession else "photographer"
-        safe_final_name = str(final_name) if final_name else account_username or "Unknown"
         
-        # Логуємо значення, які будуть використані для заміни
-        safe_log_append(logs, f"Placeholder replacement values - Age: '{safe_final_age}', Location: '{safe_final_location}', Profession: '{safe_final_profession}', Name: '{safe_final_name}'")
+
+        placeholder_replacements = {
+            r'\[Age\]': safe_final_age,
+            r'\[age\]': safe_final_age,
+            r'\[AGE\]': safe_final_age,
+            r'\[Gender\]': f"[{gender_tag}]",
+            r'\[gender\]': f"[{gender_tag}]",
+            r'\[GENDER\]': f"[{gender_tag}]",
+            r'\[City\]': safe_final_location,
+            r'\[city\]': safe_final_location,
+            r'\[CITY\]': safe_final_location,
+            r'\[City name\]': safe_final_location,
+            r'\[city name\]': safe_final_location,
+            r'\[Location\]': safe_final_location,
+            r'\[location\]': safe_final_location,
+            r'\[LOCATION\]': safe_final_location,
+            r'\[describe interests\]': safe_final_profession,
+            r'\[specific interests\]': safe_final_profession,
+            r'\[list limits\]': 'Respectful boundaries',
+            r'\[mention your availability\]': 'Available evenings and weekends',
+            r'\[mention availability\]': 'Available evenings and weekends',
+        }
         
-        # Зберігаємо оригінальні значення для логування
         original_title = title
         original_content = content
         
-        # Логуємо оригінальні значення перед заміною
-        safe_log_append(logs, f"Before replacement - Title: '{original_title[:100]}', Content preview: '{original_content[:200]}'")
-        
-        # Розширений словник замін плейсхолдерів на реальні значення
-        # Додаємо всі можливі варіанти плейсхолдерів
-        placeholder_replacements = [
-            # Age variations
-            (r'\[Age\]', safe_final_age),
-            (r'\[age\]', safe_final_age),
-            (r'\[AGE\]', safe_final_age),
-            # Gender variations
-            (r'\[Gender\]', 'M'),
-            (r'\[gender\]', 'M'),
-            (r'\[GENDER\]', 'M'),
-            # City/Location variations
-            (r'\[City\]', safe_final_location),
-            (r'\[city\]', safe_final_location),
-            (r'\[CITY\]', safe_final_location),
-            (r'\[City name\]', safe_final_location),
-            (r'\[city name\]', safe_final_location),
-            (r'\[CITY NAME\]', safe_final_location),
-            (r'\[Location\]', safe_final_location),
-            (r'\[location\]', safe_final_location),
-            (r'\[LOCATION\]', safe_final_location),
-            # Connection type variations
-            (r'\[Connection Type\]', 'friendship'),
-            (r'\[connection type\]', 'friendship'),
-            (r'\[CONNECTION TYPE\]', 'friendship'),
-            (r'\[Type of Connection\]', 'friendship'),
-            (r'\[type of connection\]', 'friendship'),
-            (r'\[TYPE OF CONNECTION\]', 'friendship'),
-            (r'\[Kind of Connection\]', 'friendship'),
-            (r'\[kind of connection\]', 'friendship'),
-            # Interests variations
-            (r'\[Interests\]', safe_final_profession),
-            (r'\[interests\]', safe_final_profession),
-            (r'\[INTERESTS\]', safe_final_profession),
-            (r'\[describe interests\]', safe_final_profession),
-            (r'\[specific interests\]', safe_final_profession),
-            (r'\[Specific Interests\]', safe_final_profession),
-            # Limits variations
-            (r'\[limits\]', 'Respectful boundaries'),
-            (r'\[Limits\]', 'Respectful boundaries'),
-            (r'\[LIMITS\]', 'Respectful boundaries'),
-            (r'\[list limits\]', 'Respectful boundaries'),
-            (r'\[List Limits\]', 'Respectful boundaries'),
-            # Availability variations
-            (r'\[local availability\]', 'Available evenings and weekends'),
-            (r'\[Local Availability\]', 'Available evenings and weekends'),
-            (r'\[LOCAL AVAILABILITY\]', 'Available evenings and weekends'),
-            (r'\[mention your availability\]', 'Available evenings and weekends'),
-            (r'\[mention availability\]', 'Available evenings and weekends'),
-            (r'\[Mention Availability\]', 'Available evenings and weekends'),
-            # Name variations
-            (r'\[name\]', safe_final_name),
-            (r'\[Name\]', safe_final_name),
-            (r'\[NAME\]', safe_final_name),
-        ]
-        
-        # Перевіряємо, чи є плейсхолдери перед заміною
-        has_placeholders_before = bool(re.search(r'\[.*?\]', title or '') or re.search(r'\[.*?\]', content or ''))
-        if has_placeholders_before:
-            safe_log_append(logs, f"Detected placeholders in AI response before replacement")
-        
-        # Виконуємо заміну плейсхолдерів
         try:
-            # Спочатку замінюємо конкретні плейсхолдери
-            for pattern, replacement in placeholder_replacements:
+            # 1. Standard replacements
+            for pattern, replacement in placeholder_replacements.items():
                 if title:
-                    title = re.sub(pattern, replacement, title, flags=re.IGNORECASE)
+                    title = re.sub(pattern, str(replacement), title, flags=re.IGNORECASE)
                 if content:
-                    content = re.sub(pattern, replacement, content, flags=re.IGNORECASE)
+                    content = re.sub(pattern, str(replacement), content, flags=re.IGNORECASE)
             
-            # Замінюємо будь-які інші квадратні дужки на порожній рядок (якщо не знайдено відповідності)
-            # Це має бути останнім кроком, щоб видалити всі інші плейсхолдери
-            # Використовуємо більш агресивний підхід - замінюємо всі квадратні дужки
+            # 2. Specific curly brace/hashtag placeholders (leaked from hints)
+            # Handle both literal {city} and leaked results like #{CityName} or {CityName}
             if title:
-                # Замінюємо всі квадратні дужки з будь-яким вмістом
-                title = re.sub(r'\[[^\]]*\]', '', title).strip()
-                # Видаляємо подвійні пробіли, які могли залишитися
-                title = re.sub(r'\s+', ' ', title).strip()
+                title = title.replace("{age}", safe_final_age)
+                title = title.replace("{gender_tag}", gender_tag)
+                title = title.replace("{city}", safe_final_location)
+                title = title.replace("{location}", safe_final_location)
+                title = re.sub(r'#\s*\{' + re.escape(safe_final_location) + r'\}', f"#{location_hashtag}", title, flags=re.IGNORECASE)
+                title = re.sub(r'\{' + re.escape(safe_final_location) + r'\}', safe_final_location, title, flags=re.IGNORECASE)
+                
+                if is_r4r:
+                    title = re.sub(r'\[r4r\]', f"[{gender_tag}]", title, flags=re.IGNORECASE)
+                    title = re.sub(r'\(r4r\)', f"({gender_tag})", title, flags=re.IGNORECASE)
+
+                if safe_final_location:
+                    title = title.replace(f"{{{safe_final_location}}}", safe_final_location)
+                    title = title.replace(f"{{#{safe_final_location}}}", f"#{location_hashtag}")
+            
             if content:
-                # Замінюємо всі квадратні дужки з будь-яким вмістом
-                content = re.sub(r'\[[^\]]*\]', '', content).strip()
-                # Видаляємо подвійні пробіли, які могли залишитися
-                content = re.sub(r'\s+', ' ', content).strip()
+                content = content.replace("{age}", safe_final_age)
+                content = content.replace("{gender_tag}", gender_tag)
+                content = content.replace("{city}", safe_final_location)
+                content = content.replace("{location}", safe_final_location)
+                content = re.sub(r'#\s*\{' + re.escape(safe_final_location) + r'\}', f"#{location_hashtag}", content, flags=re.IGNORECASE)
+                content = re.sub(r'\{' + re.escape(safe_final_location) + r'\}', safe_final_location, content, flags=re.IGNORECASE)
+
+            # Final cleanup:
+            # placeholder_leak_re now catches {title_text}, etc.
+            placeholder_leak_re = r'[\{\[]\s*(?:age|gender|city|location|connection type|kind of connection|type of connection|connection|describe interests|specific interests|list limits|mention your availability|mention availability|title_text)[^\]\}]*[\}\]]'
             
-            # Перевіряємо, чи залишилися плейсхолдери після заміни
-            has_placeholders_after = bool(re.search(r'\[[^\]]*\]', title or '') or re.search(r'\[[^\]]*\]', content or ''))
+            if title:
+                if allow_square_brackets:
+                    # Strip placeholders, keep [F4M]
+                    title = re.sub(placeholder_leak_re, '', title, flags=re.IGNORECASE)
+                    # Also strip ANY curly braces left over as they are NEVER valid in final output
+                    title = re.sub(r'\{.*?\}', '', title)
+                else:
+                    # Strip any generic brackets if not allowed
+                    title = re.sub(r'\[.*?\]', '', title)
+                    title = re.sub(r'\{.*?\}', '', title)
             
-            # Логуємо результат заміни
-            safe_log_append(logs, f"After replacement - Title: '{title[:100] if title else 'None'}', Content preview: '{content[:200] if content else 'None'}'")
-            
-            if title != original_title or content != original_content:
-                safe_log_append(logs, f"SUCCESS: Placeholders found and replaced in AI response")
-                safe_log_append(logs, f"Original title: {original_title[:100] if original_title else 'None'}")
-                safe_log_append(logs, f"Fixed title: {title[:100] if title else 'None'}")
-                safe_log_append(logs, f"Original content preview: {original_content[:200] if original_content else 'None'}")
-                safe_log_append(logs, f"Fixed content preview: {content[:200] if content else 'None'}")
-                if has_placeholders_after:
-                    safe_log_append(logs, f"ERROR: Some placeholders still remain after replacement!")
-            elif has_placeholders_before:
-                safe_log_append(logs, f"WARNING: Placeholders detected but replacement did not change values")
-                safe_log_append(logs, f"This might indicate a problem with the replacement logic")
-            else:
-                safe_log_append(logs, f"No placeholders detected in AI response")
-        except Exception as e:
-            safe_log_append(logs, f"Error during placeholder replacement: {str(e)}")
-            # Продовжуємо з оригінальними значеннями, але все одно намагаємося видалити квадратні дужки
+            if content:
+                if allow_square_brackets:
+                    content = re.sub(placeholder_leak_re, '', content, flags=re.IGNORECASE)
+                    content = re.sub(r'\{.*?\}', '', content)
+                else:
+                    content = re.sub(r'\[.*?\]', '', content)
+                    content = re.sub(r'\{.*?\}', '', content)
+
+            # Heuristic enforcement of title format based on template hints.
+            # If a template requires a tag like [F4M]/[M4F] and/or an age token, and the model omitted it,
+            # we prepend it to the title to satisfy subreddit rules.
             try:
-                if title:
-                    title = re.sub(r'\[.*?\]', '', title).strip()
-                if content:
-                    content = re.sub(r'\[.*?\]', '', content).strip()
+                hint_src = f"{getattr(template, 'title_prompt', '') or ''}\n{getattr(template, 'title_example', '') or ''}\n{rules or ''}"
+
+                # Detect partner-tag tokens from examples/rules.
+                tag = None
+                m_tag = re.search(r'\[([A-Za-z]{1,3}4[A-Za-z]{1,3})\]', hint_src, flags=re.IGNORECASE)
+                if m_tag:
+                    tag = (m_tag.group(1) or "").upper()
+                else:
+                    m_tag2 = re.search(r'\b([A-Za-z]{1,3}4[A-Za-z]{1,3})\b', hint_src, flags=re.IGNORECASE)
+                    if m_tag2:
+                        tag = (m_tag2.group(1) or "").upper()
+
+                requires_age = bool(re.search(r'\[(?:age|AGE|Age)\]', hint_src)) or bool(
+                    re.search(r'(?im)^\s*title\s*:\s*.*\bage\b', hint_src)
+                )
+                has_age = bool(re.search(r'\b\d{2}\b', title or ""))
+
+                needs_tag = False
+                if allow_square_brackets and tag:
+                    tag_re = re.compile(rf'(\[{re.escape(tag)}\]|\b{re.escape(tag)}\b)', flags=re.IGNORECASE)
+                    needs_tag = not bool(tag_re.search(title or ""))
+
+                prefix_parts = []
+                if requires_age and not has_age:
+                    prefix_parts.append(safe_final_age)
+                if needs_tag and tag:
+                    prefix_parts.append(f"[{tag}]")
+
+                if prefix_parts:
+                    title = f"{' '.join(prefix_parts)} {title}".strip()
             except Exception:
                 pass
-        
-        # Оновлюємо відповідь з виправленими значеннями
-        # ВАЖЛИВО: Завжди оновлюємо ai_response з виправленими значеннями
-        if ai_response and isinstance(ai_response, dict):
-            try:
-                ai_response["title"] = title
-                ai_response["content"] = content
-            except Exception as e:
-                safe_log_append(logs, f"Error updating ai_response: {str(e)}")
-                # Створюємо новий словник, якщо не вдалося оновити
-                ai_response = {
-                    "title": title,
-                    "content": content,
-                    "post_type": ai_response.get("post_type", "Text"),
-                    "url_to_share": ai_response.get("url_to_share", ""),
-                    "hashtags": ai_response.get("hashtags", ""),
-                }
-        else:
-            # Якщо ai_response не є словником, створюємо новий
-            ai_response = {
-                "title": title,
-                "content": content,
-                "post_type": "Text",
-                "url_to_share": "",
-                "hashtags": "",
-            }
 
-        # 7. Створення нового поста
+            # Strict override: if template defines title_format/title_example, ALWAYS enforce it.
+            if strict_title and "{title_text}" in strict_title:
+                # AI was instructed to generate ONLY title_text, so use it directly
+                if ai_should_generate_only_title_text:
+                    extracted_headline = title.strip()
+                    safe_log_append(logs, f"AI returned title_text (before cleanup): {extracted_headline[:80]}")
+                    
+                    # CRITICAL: Even though AI was instructed to generate ONLY title_text,
+                    # it sometimes still includes gender tags, age, location - strip them aggressively
+                    
+                    # Infer gender tag for stripping
+                    gender_tag_for_cleanup = "F4M"  # Default
+                    try:
+                        title_format_source = getattr(template, "title_format", "") or ""
+                        gender_match = re.search(r'\[([FMfm])4([FMfmAa])\]', title_format_source)
+                        if gender_match:
+                            gender_tag_for_cleanup = f"{gender_match.group(1).upper()}4{gender_match.group(2).upper()}"
+                    except Exception:
+                        pass
+                    
+                    # Strip gender tags like [F4M], [M4F], (F4M), etc from the beginning
+                    extracted_headline = re.sub(r'^\s*[\[\(]?\s*[FMTfmt]{1,3}4[FMfmAa]{1,3}\s*[\]\)]?\s*[-–—:|]*\s*', '', extracted_headline, flags=re.IGNORECASE)
+                    
+                    # Strip age numbers from the beginning (e.g. "26 Ready..." -> "Ready...")
+                    extracted_headline = re.sub(r'^\s*\d{1,2}\s+', '', extracted_headline)
+                    
+                    # Strip hashtag locations from the beginning (e.g. "#Orlando Ready..." -> "Ready...")
+                    extracted_headline = re.sub(r'^\s*#\w+\s*[-–—:|]*\s*', '', extracted_headline)
+                    
+                    # Strip plain location names if they match (case-insensitive)
+                    if final_location:
+                        loc_pattern = re.escape(final_location)
+                        extracted_headline = re.sub(rf'^\s*{loc_pattern}\s*[-–—:|]*\s*', '', extracted_headline, flags=re.IGNORECASE)
+                    
+                    # Strip any remaining leading separators
+                    extracted_headline = re.sub(r'^\s*[-–—:|]+\s*', '', extracted_headline).strip()
+                    
+                    safe_log_append(logs, f"Using AI title as title_text (after cleanup): {extracted_headline[:80]}")
+                else:
+                    # Fallback: extract from full title if AI didn't follow instructions
+                    reqs = TitleFormatRequirements.from_template(getattr(template, "title_format", ""))
+                    location_hashtag = sanitize_hashtag_token(final_location)
+                    
+                    # Infer gender tag for extraction
+                    gender_tag_for_extraction = "F4M"  # Default
+                    try:
+                        title_format_source = getattr(template, "title_format", "") or ""
+                        gender_match = re.search(r'\[([FMfm])4([FMfmAa])\]', title_format_source)
+                        if gender_match:
+                            gender_tag_for_extraction = f"{gender_match.group(1).upper()}4{gender_match.group(2).upper()}"
+                    except Exception:
+                        pass
+                    
+                    prefix_hint = _render_title_format(getattr(template, "title_format", ""), {
+                        "final_age": final_age,
+                        "gender": inferred_gender,
+                        "final_location": final_location,
+                        "location": final_location,
+                        "city": final_location,
+                        "title_text": "___EXTRACT_HERE___"
+                    })
+                    prefix_hint = prefix_hint.split("___EXTRACT_HERE___")[0].strip()
+
+                    extracted_headline = TitleFormatter.extract_title_text_from_ai_title(
+                        title,
+                        final_age=final_age,
+                        rendered_gender_tag=gender_tag_for_extraction,
+                        location_hashtag=location_hashtag,
+                        final_location=final_location,
+                        wants_age=reqs.wants_age,
+                        wants_location=reqs.wants_any_location,
+                        prefix_to_strip=prefix_hint
+                    )
+                    safe_log_append(logs, f"Extracted title_text from AI response: {extracted_headline[:80]}")
+
+                # Re-render with the extracted headline using deduplicated context
+                title = _render_title_format(getattr(template, "title_format", "") or getattr(template, "title_example", ""), {
+                    "final_age": final_age,
+                    "gender": inferred_gender,
+                    "final_location": final_location,
+                    "location": final_location,
+                    "city": final_location,
+                    "location_full": final_location,
+                    "city_full": final_location,
+                    "title_text": extracted_headline
+                })
+                safe_log_append(logs, f"Final formatted title: {title[:120]}")
+                
+        except Exception as e:
+            safe_log_append(logs, f"Error during TitleFormatter integration: {str(e)}")
+        
+        if title != original_title or content != original_content:
+            safe_log_append(logs, f"WARNING: Placeholders or duplicate prefixes resolved in AI response")
+            safe_log_append(logs, f"Original title: {original_title[:100]}")
+            safe_log_append(logs, f"Fixed title: {title[:100]}")
+            
+        if isinstance(ai_response, dict):
+            ai_response["title"] = title
+            ai_response["content"] = content
+        else:
+            safe_log_append(logs, f"ERROR: ai_response is not a dict, cannot update")
+
         safe_log_append(logs, "Creating Reddit Post doc")
-        # Перевірка що template.sub містить правильну назву сабредіту
         subreddit_name = template.sub.strip()
         if not subreddit_name.startswith("r/"):
             subreddit_name = f"r/{subreddit_name}"
@@ -741,44 +870,72 @@ def generate_post_for_agent(agent_name):
     """
     API-метод: повертає новий Reddit Post для вказаного агента.
     """
-    # Delegate to v2 generator.
-    return post_generator_v2.generate_post_for_agent(agent_name=agent_name)
     logs = []
     
+    try:
+        resp = getattr(frappe, "local", None)
+        if resp is None:
+            resp = frappe._dict()
+            frappe.local = resp
+        
+        if not hasattr(resp, "response") or resp.response is None:
+            response_obj = frappe._dict()
+            try:
+                resp.response = response_obj
+            except Exception:
+                response_obj = None
+        
+        if response_obj is not None:
+            headers = getattr(response_obj, "headers", None)
+            if headers is None or not isinstance(headers, dict):
+                headers = {}
+                try:
+                    response_obj.headers = headers
+                except Exception:
+                    headers = None
+            
+            if headers is not None:
+                try:
+                    headers["Access-Control-Allow-Origin"] = "*"
+                    headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+                    headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Frappe-Site-Name"
+                    headers["Access-Control-Max-Age"] = "3600"
+                except Exception:
+                    pass  
+    except Exception as e:
+        safe_log_append(logs, f"Warning: Could not set CORS headers: {str(e)}")
     if not agent_name:
         frappe.throw("Agent name is required.")
     
-    # Безпечно додаємо до logs
-    safe_log_append(logs, f"1Agent received: {agent_name}")
+    safe_log_append(logs, f"Agent received: {agent_name}")
 
-    # 1. Знаходимо акаунт агента
     account_name = frappe.db.get_value(
+        "Reddit Account", {"assistant_name": agent_name}, "name"
+    )
+    if not account_name:
+        account_name = frappe.db.get_value(
             "Reddit Account", {"username": agent_name}, "name"
         )
-    
     if not account_name:
         frappe.throw(f"No Reddit Account found for agent '{agent_name}'.")
     
-    # Безпечно додаємо до logs
     safe_log_append(logs, f"Account resolved: {account_name}")
 
     account_doc = frappe.get_doc("Reddit Account", account_name)
-    
-    # ВАЖЛИВО: Встановлюємо дефолтні значення ОДРАЗУ після отримання account_doc
-    # Це запобігає помилкам AttributeError при зверненні до неіснуючих полів
-    # Включаємо posting_style, щоб уникнути помилок при серіалізації об'єкта Frappe
+
     for _field in ("account_description", "posting_style", "assistant_name", "assistant_age", 
                   "assistant_profession", "assistant_location", "custom_prompt_instructions", 
-                "username"):
+                  "subreddit_group", "status", "is_posting_paused", "username"):
         if not hasattr(account_doc, _field):
             if _field == "assistant_age":
                 setattr(account_doc, _field, None)
+            elif _field in ("is_posting_paused",):
+                setattr(account_doc, _field, False)
+            elif _field == "status":
+                setattr(account_doc, _field, "Inactive")
             else:
                 setattr(account_doc, _field, "")
-    safe_log_append(logs, f"Account doc: {account_doc}")
-    account_info = account_doc.as_dict().get("assistant_name", "") + " " + str(account_doc.as_dict().get("assistant_age", "")) + " " + account_doc.as_dict().get("assistant_profession", "")
     
-    # Безпечно отримуємо subreddit_group
     subreddit_group = account_doc.subreddit_group
     if not subreddit_group:
         frappe.throw(f"Account '{account_name}' has no subreddit group assigned.")
@@ -829,21 +986,18 @@ def generate_post_for_agent(agent_name):
 
     try:
         result = generate_post_from_template(
-            template_name, account_name=account_doc.name, agent_name=agent_name, account_info=account_info
+            template_name, account_name=account_doc.name, agent_name=agent_name
         )
     except Exception as e:
         log_error_safe("generate_post_for_agent", logs, e)
         raise
 
-    # Безпечно обробляємо result
     if result is None:
         frappe.throw("Failed to generate post from template")
     
-    # Переконуємося, що result є словником
     if not isinstance(result, dict):
         frappe.throw("Invalid result from generate_post_from_template")
     
-    # Безпечно додаємо logs з result
     try:
         result_logs = result.get("logs", [])
         if result_logs and isinstance(result_logs, list):
@@ -851,13 +1005,11 @@ def generate_post_for_agent(agent_name):
                 try:
                     logs.extend(result_logs)
                 except Exception:
-                    pass  # Ігноруємо помилки extend
+                    pass  
     except Exception:
-        pass  # Ігноруємо помилки обробки logs
+        pass 
     
-    # Безпечно оновлюємо result
     try:
-        # Переконуємося, що result є словником перед викликом update
         if isinstance(result, dict):
             result.update(
                 {
@@ -873,7 +1025,6 @@ def generate_post_for_agent(agent_name):
                 }
             )
         else:
-            # Якщо result не є словником, створюємо новий словник
             result = {
                 "agent_account": account_doc.name,
                 "agent_name": agent_name,
@@ -886,7 +1037,6 @@ def generate_post_for_agent(agent_name):
                 "logs": logs if logs is not None and isinstance(logs, list) else [],
             }
     except Exception as e:
-        # Якщо update не вдався, створюємо новий словник
         result = {
             "agent_account": account_doc.name,
             "agent_name": agent_name,
