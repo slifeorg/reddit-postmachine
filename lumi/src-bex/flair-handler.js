@@ -339,11 +339,15 @@ async function openFlairSelector() {
 
 // Priority list for flair selection (only typical allowed variants)
 const FLAIR_PRIORITY_LIST = [
-	'F4M', 'F 4 M', 'f4m', 'w4m', 'W 4 M', 'Baltimore', 'Female', 'Female 4 Male',
+	'F4M', 'Looking for Someone', 'Akron', 'Looking For Soft Swaps', 'Showing Off', 'W4M', 'East', 'F 4 M', 'f4m', 'w4m', 'W 4 M', 'Baltimore', 'Female', 'Female 4 Male',
 	'female', 'Female',
 	'pic', 'Pic',
 	'[ ]'
 ]
+
+const FLAIR_PRIORITY_NORMALIZED_SET = new Set(
+	FLAIR_PRIORITY_LIST.map((t) => normalizeFlairText(t)).filter(Boolean)
+)
 
 // Helper function to normalize flair text for comparison
 function normalizeFlairText(text) {
@@ -355,7 +359,11 @@ function isAllowedFlairText(text) {
 	const normalized = normalizeFlairText(text)
 	if (!normalized) return false
 
+	const matchesPriorityList = Array.from(FLAIR_PRIORITY_NORMALIZED_SET)
+		.some((p) => normalized.includes(p))
+
 	return (
+		matchesPriorityList ||
 		normalized.startsWith('f4') ||
 		normalized.startsWith('female') ||
 		normalized.startsWith('pic') ||

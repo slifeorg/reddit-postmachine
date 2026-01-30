@@ -1,5 +1,6 @@
 import { submitLogger } from "./logger.js"
 import { handleFlairSelection, handleAutomaticFlairSelection } from "./flair-handler.js"
+import { formatAndValidateTitle } from "./title-format.js"
 
 if (window.__rpm_submit_script_running) {
 	submitLogger.warn('[Submit Script] Already running on this tab, stopping duplicate.');
@@ -61,45 +62,45 @@ function installBeforeUnloadBlocker() {
 // Run immediately on module load
 installBeforeUnloadBlocker()
 
-// ============================================================================
-// AUTO-RUN BOOTSTRAP (Auto Flow)
-// - Script can load on /user/.../submitted/ but submission logic must run on /submit.
-// - If sessionStorage contains postdata, force-run even for background-created tabs.
-// ============================================================================
+	// ============================================================================
+	// AUTO-RUN BOOTSTRAP (Auto Flow)
+	// - Script can load on /user/.../submitted/ but submission logic must run on /submit.
+	// - If sessionStorage contains postdata, force-run even for background-created tabs.
+	// ============================================================================
 
-; (function rpmAutoRunBootstrap() {
-	try {
-		if (window.__rpm_submit_autorun_bootstrap__) return
-		window.__rpm_submit_autorun_bootstrap__ = true
+	; (function rpmAutoRunBootstrap() {
+		try {
+			if (window.__rpm_submit_autorun_bootstrap__) return
+			window.__rpm_submit_autorun_bootstrap__ = true
 
-		const url = window.location.href
-		const path = window.location.pathname || ""
-		const isSubmit = (
-			path === '/submit' ||
-			path.startsWith('/submit/') ||
-			/^\/r\/[^\/]+\/submit(?:\/|$)/.test(path)
-		)
-		const hasPostData = !!sessionStorage.getItem("reddit-post-machine-postdata")
+			const url = window.location.href
+			const path = window.location.pathname || ""
+			const isSubmit = (
+				path === '/submit' ||
+				path.startsWith('/submit/') ||
+				/^\/r\/[^\/]+\/submit(?:\/|$)/.test(path)
+			)
+			const hasPostData = !!sessionStorage.getItem("reddit-post-machine-postdata")
 
-		submitLogger.log("[Submit Script] Auto-run bootstrap check", { url, path, isSubmit, hasPostData })
+			submitLogger.log("[Submit Script] Auto-run bootstrap check", { url, path, isSubmit, hasPostData })
 
-		// Only auto-run the submit workflow on /submit pages.
-		if (!isSubmit) return
+			// Only auto-run the submit workflow on /submit pages.
+			if (!isSubmit) return
 
-		// Give Reddit time to mount composer/shadow DOM.
-		setTimeout(() => {
-			try {
-				// If we have postData, force-run even if the tab is marked as background-created.
-				runPostSubmissionScript(hasPostData /* skipTabStateCheck */)
-					.catch((e) => submitLogger.error("[Submit Script] Auto-run failed:", e))
-			} catch (e) {
-				submitLogger.error("[Submit Script] Auto-run threw:", e)
-			}
-		}, 600)
-	} catch (e) {
-		submitLogger.warn("[Submit Script] Auto-run bootstrap failed:", e)
-	}
-})()
+			// Give Reddit time to mount composer/shadow DOM.
+			setTimeout(() => {
+				try {
+					// If we have postData, force-run even if the tab is marked as background-created.
+					runPostSubmissionScript(hasPostData /* skipTabStateCheck */)
+						.catch((e) => submitLogger.error("[Submit Script] Auto-run failed:", e))
+				} catch (e) {
+					submitLogger.error("[Submit Script] Auto-run threw:", e)
+				}
+			}, 600)
+		} catch (e) {
+			submitLogger.warn("[Submit Script] Auto-run bootstrap failed:", e)
+		}
+	})()
 function removeBeforeUnloadListeners() {
 	installBeforeUnloadBlocker()
 	submitLogger.log('Removing Reddit\'s beforeunload event listeners')
@@ -217,67 +218,13 @@ function stripUrls(text) {
 	return text.replace(urlRegex, '').replace(/\s+/g, ' ').trim();
 }
 
-function detectAutoRetryMessage() {
-	try {
-		const bodyText = (document.body?.innerText || '').toLowerCase();
-		const messages = [
-			'post is awaiting moderator approval',
-			'awaiting moderator approval',
-			'you\'ve been banned from contributing to this community',
-			'you have been banned from contributing to this community'
-		];
-		for (const msg of messages) {
-			if (bodyText.includes(msg)) {
-				return msg;
-			}
-		}
-	} catch (_) {
-	}
-	return null;
-}
-
-/**
- * Extracts hashtags from text (unique, preserves original case/order).
- * @param {string} text
- * @returns {string[]}
- */
-function extractHashtags(text) {
-	try {
-		const s = (text || '').toString();
-		// Unicode-aware hashtag matcher (letters/numbers/underscore)
-		const matches = s.match(/#[\p{L}\p{N}_]+/gu) || [];
-		const seen = new Set();
-		const out = [];
-		for (const tag of matches) {
-			const key = tag.toLowerCase();
-			if (seen.has(key)) continue;
-			seen.add(key);
-			out.push(tag);
-		}
-		return out;
-	} catch (_) {
-		// Fallback (ASCII only) in case \p{} isn't supported for any reason.
-		const s = (text || '').toString();
-		const matches = s.match(/#[A-Za-z0-9_]+/g) || [];
-		const seen = new Set();
-		const out = [];
-		for (const tag of matches) {
-			const key = tag.toLowerCase();
-			if (seen.has(key)) continue;
-			seen.add(key);
-			out.push(tag);
-		}
-		return out;
-	}
-}
-
 // Strict helper to find username via "View Profile" text
 // This is the most reliable method as it targets the specific logged-in user UI component
 function findUsernameViaViewProfile() {
 	try {
 		// Use deepQuery capabilities via document.querySelectorAll for simplicity or custom walker if needed
-		// The original code used document.querySelectorAll('span') which is fine for flat checking,
-		// but let's check if we need to pierce shadow DOM.
+		// The original code used document.querySelectorAll('span') which is fine for flat checking, 
+		// but let's check if we need to pierce shadow DOM. 
 		// For now, mirroring my-content-script exactly.
 		const viewProfileSpans = Array.from(document.querySelectorAll('span')).filter(el => el.textContent === 'View Profile');
 		for (const span of viewProfileSpans) {
@@ -786,6 +733,56 @@ async function clickTab(tabValue) {
 	return false
 }
 
+async function handleMatureContentDialog() {
+	submitLogger.log('🔍 [MATURE_CONTENT] Checking for Mature Content warning dialog...')
+
+	try {
+		const maxAttempts = 10
+		const pollInterval = 500
+
+		for (let attempt = 0; attempt < maxAttempts; attempt++) {
+			await sleep(pollInterval)
+			submitLogger.log(`🔍 [MATURE_CONTENT] Attempt ${attempt + 1}/${maxAttempts}...`)
+
+			// Look for the NSFW action button with the specific ID and text content
+			const nsfwButton = qs('#nsfw-action-button button') || 
+								deepQuery('#nsfw-action-button button')
+
+			if (nsfwButton && nsfwButton.textContent.includes('Yes, I\'m Over 18')) {
+				submitLogger.log('✅ [MATURE_CONTENT] Mature Content dialog detected, clicking "Yes, I\'m Over 18" button')
+				nsfwButton.click()
+				await sleep(1000)
+				submitLogger.log('✅ [MATURE_CONTENT] Successfully clicked mature content confirmation button')
+				return true
+			}
+
+			// Alternative approach: look for any button with the specific text
+			const allButtons = document.querySelectorAll('button')
+			for (const btn of allButtons) {
+				if (btn.textContent.includes('Yes, I\'m Over 18')) {
+					submitLogger.log('✅ [MATURE_CONTENT] Found Mature Content button via text search, clicking...')
+					btn.click()
+					await sleep(1000)
+					submitLogger.log('✅ [MATURE_CONTENT] Successfully clicked mature content button via text search')
+					return true
+				}
+			}
+
+			// Check if dialog exists but button not found yet
+			const dialog = qs('[role="dialog"]') || deepQuery('shreddit-modal')
+			if (dialog && dialog.textContent.includes('Mature Content')) {
+				submitLogger.log('🔍 [MATURE_CONTENT] Mature Content dialog found, continuing to search for button...')
+			}
+		}
+
+		submitLogger.log('❌ [MATURE_CONTENT] No Mature Content dialog detected within timeout')
+		return false
+	} catch (error) {
+		submitLogger.error('⚠️ [MATURE_CONTENT] Error handling Mature Content dialog:', error)
+		return false
+	}
+}
+
 async function handleRuleViolationDialog() {
 	submitLogger.log('Checking for rule violation dialog after submit...')
 
@@ -896,6 +893,11 @@ async function submitPost() {
 			btnToClick.scrollIntoView({ block: "center", behavior: "instant" });
 			await sleep(200);
 			btnToClick.click();
+			submitLogger.log('🚀 [SUBMIT] Post button clicked, now checking for Mature Content dialog...');
+			
+			// Handle Mature Content warning dialog that may appear after submit
+			await handleMatureContentDialog();
+			
 			await handleRuleViolationDialog();
 			return true;
 		}
@@ -905,6 +907,11 @@ async function submitPost() {
 			Array.from(document.querySelectorAll('button')).find(b => b.textContent.toLowerCase().includes('post'));
 		if (fallbackBtn) {
 			fallbackBtn.click();
+			submitLogger.log('🚀 [SUBMIT] Fallback post button clicked, now checking for Mature Content dialog...');
+			
+			// Handle Mature Content warning dialog that may appear after submit
+			await handleMatureContentDialog();
+			
 			return true;
 		}
 
@@ -968,7 +975,15 @@ async function runPostSubmissionScript(skipTabStateCheck = false) {
 			return
 		}
 
-		submitLogger.log('Post submission script: Got post data:', postData.title)
+		// Log a compact "identity" of the post payload to make template/subreddit issues obvious in the console.
+		// Title formatting issues are almost always upstream (API/template), because we only trim & paste here.
+		submitLogger.log('Post submission script: Got post data (summary):', {
+			title: postData?.title,
+			subreddit: postData?.subreddit,
+			post_type: postData?.post_type,
+			template_used: postData?.template_used,
+			post_name: postData?.post_name || postData?.name || postData?.id || null
+		})
 
 		// === TYPE DETERMINATION & URL HANDLING LOGIC ===
 		let isLinkPost = false
@@ -1004,16 +1019,66 @@ async function runPostSubmissionScript(skipTabStateCheck = false) {
 
 		// Step 1: Title
 		if (await clickTab(targetTab)) {
-			await fillTitle(postData)
+			// Enforce subreddit-specific title requirements BEFORE filling.
+			const titleCheck = formatAndValidateTitle({
+				title: postData?.title,
+				subreddit: postData?.subreddit
+			})
+
+			if (!titleCheck.ok) {
+				submitLogger.error('[Submit Script] INVALID_TITLE_FORMAT: Refusing to submit due to title format rules.', {
+					url: window.location.href,
+					subreddit: postData?.subreddit || null,
+					originalTitle: postData?.title || null,
+					candidateTitle: titleCheck.title || null,
+					rule: titleCheck.rule || null
+				})
+
+				chrome.runtime.sendMessage({
+					type: 'ACTION_COMPLETED',
+					action: 'POST_CREATION_COMPLETED',
+					success: false,
+					skipped: true,
+					error: 'SKIPPED_INVALID_TITLE_FORMAT',
+					errorCode: 'SKIPPED_INVALID_TITLE_FORMAT',
+					frappePostName: postData?.name || postData?.id,
+					submittedData: {
+						title: titleCheck.title || postData?.title || null,
+						body: null,
+						subreddit: postData?.subreddit || null,
+						url: postData?.url || null,
+						postType: (postData?.post_type || 'text')
+					},
+					data: {
+						subreddit: postData?.subreddit || null,
+						username: postData?.userName || postData?.username || null,
+						reason: `invalid_title_format:${titleCheck.rule || titleCheck.reason || 'unknown'}`
+					}
+				}).catch(() => { })
+
+				await notifyWorkflowNextStep({
+					success: false,
+					postData,
+					error: 'SKIPPED_INVALID_TITLE_FORMAT'
+				})
+
+				// Clear stored postdata to let workflow proceed to next item
+				try { sessionStorage.removeItem('reddit-post-machine-postdata') } catch (_) { }
+				try { sessionStorage.removeItem('reddit-post-machine-script-stage') } catch (_) { }
+
+				return
+			}
+
+			// Use normalized title (may differ from backend output).
+			const postDataWithTitle = titleCheck.changed ? { ...postData, title: titleCheck.title } : postData
+			await fillTitle(postDataWithTitle)
 		} else {
 			return
 		}
 
 		// Step 2: Flair
-		let selectedFlair = null;
 		try {
 			const flairResult = await handleAutomaticFlairSelection();
-			if (flairResult?.selectedFlair) selectedFlair = flairResult.selectedFlair;
 			if (!flairResult.success) {
 				submitLogger.warn(`Flair selection warning: ${flairResult.error}`);
 			}
@@ -1051,9 +1116,6 @@ async function runPostSubmissionScript(skipTabStateCheck = false) {
 
 		let bodyText = stripUrls(bodyTextRaw);
 
-		const hashtagsArr = extractHashtags(bodyText);
-		const hashtags = hashtagsArr.length ? hashtagsArr.join(' ') : null;
-
 		// Guard: do NOT publish without body text
 		if (!bodyText || !bodyText.trim()) {
 			submitLogger.error('[Submit Script] EMPTY_BODY_REFUSED: postData has no body text. Aborting submit.', {
@@ -1077,15 +1139,11 @@ async function runPostSubmissionScript(skipTabStateCheck = false) {
 					body: null,
 					subreddit: postData?.subreddit || null,
 					url: postData?.url || null,
-					postType: (postData?.post_type || 'text'),
-					hashtags,
-					flair: selectedFlair
+					postType: (postData?.post_type || 'text')
 				},
 				data: {
 					subreddit: postData?.subreddit || null,
-					username: postData?.userName || postData?.username || null,
-					hashtags,
-					flair: selectedFlair
+					username: postData?.userName || postData?.username || null
 				}
 			}).catch(() => { });
 
@@ -1122,15 +1180,11 @@ async function runPostSubmissionScript(skipTabStateCheck = false) {
 					body: bodyText,
 					subreddit: postData?.subreddit || null,
 					url: postData?.url || null,
-					postType: (postData?.post_type || 'text'),
-					hashtags,
-					flair: selectedFlair
+					postType: (postData?.post_type || 'text')
 				},
 				data: {
 					subreddit: postData?.subreddit || null,
-					username: postData?.userName || postData?.username || null,
-					hashtags,
-					flair: selectedFlair
+					username: postData?.userName || postData?.username || null
 				}
 			}).catch(() => { });
 
@@ -1164,44 +1218,6 @@ async function runPostSubmissionScript(skipTabStateCheck = false) {
 
 			while (Date.now() - startTime < timeout) {
 				await sleep(500)
-
-				const retryReason = detectAutoRetryMessage();
-				if (retryReason) {
-					submitLogger.warn(`[Submit Script] Auto-retry condition detected: ${retryReason}`);
-
-					await notifyWorkflowNextStep({
-						success: false,
-						postData,
-						error: 'POST_REQUIRES_NEW'
-					});
-
-					chrome.runtime.sendMessage({
-						type: 'ACTION_COMPLETED',
-						action: 'POST_CREATION_COMPLETED',
-						success: false,
-						error: 'POST_REQUIRES_NEW',
-						errorCode: 'POST_REQUIRES_NEW',
-						frappePostName: postData?.name || postData?.id,
-						submittedData: {
-							title: postData?.title || null,
-							body: bodyText || postData?.body || null,
-							subreddit: postData?.subreddit || null,
-							url: postData?.url || null,
-							postType: (postData?.post_type || 'text'),
-							hashtags,
-							flair: selectedFlair
-						},
-						data: {
-							username: postData?.userName || postData?.username || null,
-							subreddit: postData?.subreddit || null,
-							reason: retryReason
-						}
-					}).catch(() => { });
-
-					try { sessionStorage.removeItem('reddit-post-machine-postdata') } catch (_) { }
-					try { sessionStorage.removeItem('reddit-post-machine-script-stage') } catch (_) { }
-					return;
-				}
 
 				// FAST CHECK: Look for "Post submitted" toast or similar indicators
 				const toast = document.querySelector('faceplate-toast');
@@ -1260,15 +1276,11 @@ async function runPostSubmissionScript(skipTabStateCheck = false) {
 							body: bodyText || postData?.body || null,
 							subreddit: postData?.subreddit || null,
 							url: postData?.url || null,
-							postType: (postData?.post_type || 'text'),
-							hashtags,
-							flair: selectedFlair
+							postType: (postData?.post_type || 'text')
 						},
 						data: {
 							username: postData?.userName || postData?.username || null,
 							subreddit: postData?.subreddit || null,
-							hashtags,
-							flair: selectedFlair
 						}
 					}).catch(() => { })
 
@@ -1310,9 +1322,7 @@ async function runPostSubmissionScript(skipTabStateCheck = false) {
 						body: bodyText || postData?.body || null,
 						subreddit: postData?.subreddit || null,
 						url: postData?.url || null,
-						postType: (postData?.post_type || 'text'),
-						hashtags,
-						flair: selectedFlair
+						postType: (postData?.post_type || 'text')
 					},
 					data: {
 						redditUrl,
@@ -1325,13 +1335,9 @@ async function runPostSubmissionScript(skipTabStateCheck = false) {
 							body: bodyText || postData?.body || null,
 							subreddit: postData?.subreddit || null,
 							url: postData?.url || null,
-							postType: (postData?.post_type || 'text'),
-							hashtags,
-							flair: selectedFlair
+							postType: (postData?.post_type || 'text')
 						},
-						frappePostName: postData?.name || postData?.id,
-						hashtags,
-						flair: selectedFlair
+						frappePostName: postData?.name || postData?.id
 					}
 				}).catch(() => { });
 
@@ -1367,9 +1373,7 @@ async function runPostSubmissionScript(skipTabStateCheck = false) {
 						body: bodyText || postData?.body || null,
 						subreddit: postData?.subreddit || null,
 						url: postData?.url || null,
-						postType: (postData?.post_type || 'text'),
-						hashtags,
-						flair: selectedFlair
+						postType: (postData?.post_type || 'text')
 					}
 				}).catch(() => { })
 			}
@@ -1394,9 +1398,7 @@ async function runPostSubmissionScript(skipTabStateCheck = false) {
 					body: bodyText || postData?.body || null,
 					subreddit: postData?.subreddit || null,
 					url: postData?.url || null,
-					postType: (postData?.post_type || 'text'),
-					hashtags,
-					flair: selectedFlair
+					postType: (postData?.post_type || 'text')
 				}
 			}).catch(() => { })
 		}

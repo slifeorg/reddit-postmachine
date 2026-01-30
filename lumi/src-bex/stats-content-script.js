@@ -507,12 +507,22 @@ function extractPostDataFromShredditPosts(shredditPosts) {
 				itemState: postAttributes.itemState || '',
 				viewContext: postAttributes.viewContext || '',
 				voteType: postAttributes.voteType || '',
+				isBlocked: post.textContent?.includes('blocked') ||
+					post.textContent?.includes('post blocked') ||
+					post.querySelector('[icon-name="block"]') !== null ||
+					postAttributes.itemState === 'blocked' ||
+					postAttributes.itemState === 'moderator_blocked' || false,
 
 				// Enhanced moderation detection (autoflow compatible)
 				moderationStatus: {
 					isRemoved: post.textContent?.includes('removed by the moderators') ||
 						post.querySelector('[icon-name="remove"]') !== null ||
 						postAttributes.itemState === 'moderator_removed' || false,
+					isBlocked: post.textContent?.includes('blocked') ||
+						post.textContent?.includes('post blocked') ||
+						post.querySelector('[icon-name="block"]') !== null ||
+						postAttributes.itemState === 'blocked' ||
+						postAttributes.itemState === 'moderator_blocked' || false,
 					isLocked: post.querySelector('[icon-name="lock-fill"]') !== null ||
 						postAttributes.itemState === 'locked' || false,
 					isDeleted: post.textContent?.includes('deleted by the user') ||
@@ -733,12 +743,17 @@ async function quickCollectPostData(options = {}) {
 					attrs.moderationStatus = {
 						isRemoved: post.textContent?.includes('removed by the moderators') ||
 							post.querySelector('[icon-name="remove"]') !== null,
+						isBlocked: post.textContent?.includes('blocked') ||
+							post.textContent?.includes('post blocked') ||
+							post.querySelector('[icon-name="block"]') !== null ||
+							attrs.itemState === 'blocked' ||
+							attrs.itemState === 'moderator_blocked',
 						isLocked: post.querySelector('[icon-name="lock-fill"]') !== null,
 						itemState: attrs.itemState
 					}
 					// Legacy compatibility
 					attrs.isRemoved = attrs.moderationStatus.isRemoved
-					attrs.isBlocked = attrs.moderationStatus.isRemoved
+					attrs.isBlocked = attrs.moderationStatus.isBlocked
 				}
 
 				return attrs

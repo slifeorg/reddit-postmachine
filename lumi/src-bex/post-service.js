@@ -1,4 +1,7 @@
-import { postServiceLogger } from "./logger.js";/**
+import { postServiceLogger } from "./logger.js";
+import { TitleFormatter } from "./title-formatter.js";
+
+/**
  * Post Service Module
  * Handles post generation, API integration, and post creation decision logic
  */
@@ -110,8 +113,19 @@ export class PostDataService {
 						// Extract post data from Frappe response
 						if (frappeData && frappeData.data) {
 							const postData = frappeData.data
-							return {
-								title: postData.title || 'Generated Post',
+							
+							// Apply title formatting rules from CSV templates
+							let processedTitle = postData.title || 'Generated Post'
+							processedTitle = TitleFormatter.applyTitleFormattingRules(processedTitle, postData.subreddit_name || postData.subreddit)
+							
+							// Validate the processed title
+							const validation = TitleFormatter.validateTitle(processedTitle, postData.subreddit_name || postData.subreddit)
+							if (!validation.isValid) {
+								postServiceLogger.warn('[PostDataService] Title validation issues:', validation.issues)
+							}
+							
+							const mapped = {
+								title: processedTitle,
 								body: postData.body_text || postData.content || postData.body || '',
 								url: postData.url_to_share || postData.url || '',
 								subreddit: postData.subreddit_name || postData.subreddit || 'sphynx',
@@ -120,6 +134,15 @@ export class PostDataService {
 								account: postData.account,
 								template_used: postData.template_used
 							}
+							// Extra visibility for debugging mismatched templates vs subreddit rules.
+							postServiceLogger.log('[PostDataService] Mapped post payload for extension:', {
+								title: mapped.title,
+								subreddit: mapped.subreddit,
+								post_type: mapped.post_type,
+								template_used: mapped.template_used,
+								post_name: mapped.post_name
+							})
+							return mapped
 						}
 					}
 
@@ -132,8 +155,19 @@ export class PostDataService {
 						data.message.docs.length > 0
 					) {
 						const apiPost = data.message.docs[0]
+						
+						// Apply title formatting rules to legacy format as well
+						let processedTitle = apiPost.title || 'Generated Post'
+						processedTitle = TitleFormatter.applyTitleFormattingRules(processedTitle, apiPost.subreddit)
+						
+						// Validate the processed title
+						const validation = TitleFormatter.validateTitle(processedTitle, apiPost.subreddit)
+						if (!validation.isValid) {
+							postServiceLogger.warn('[PostDataService] Legacy title validation issues:', validation.issues)
+						}
+						
 						return {
-							title: apiPost.title || 'Generated Post',
+							title: processedTitle,
 							body: apiPost.content || apiPost.body || '',
 							url: apiPost.url || '',
 							subreddit: apiPost.subreddit || 'sphynx',
@@ -183,6 +217,44 @@ export class PostDataService {
 		const userName = postsData?.userName
 		// Monitoring window (minutes): wait this long before creating a new post without deletion
 		const MONITORING_WINDOW_MINUTES = 20
+
+		// One-shot override: after a submit-time subreddit ban (no post created), force the next post creation
+		// without waiting for the 20-minute monitoring hold (which otherwise results in a 2-minute recheck loop).
+		if (userName) {
+			const forceKey = `forceCreatePost_${userName}`
+			try {
+				const forceRes = await chrome.storage.local.get([forceKey])
+				const forceInfo = forceRes?.[forceKey] || null
+				if (forceInfo) {
+					const ageMs = Date.now() - Number(forceInfo.timestamp || 0)
+					// Treat as valid for 10 minutes; remove if stale.
+					if (ageMs >= 0 && ageMs < 10 * 60 * 1000) {
+						postServiceLogger.log(`[PostDataService] ⚡ Force-create flag detected for ${userName}. Bypassing monitoring window.`)
+						await chrome.storage.local.remove([forceKey])
+
+						const totalPosts = postsData?.postsInfo?.posts?.length || 0
+						const decisionReport = {
+							timestamp: new Date().toISOString(),
+							totalPosts,
+							lastPostAge: null,
+							lastPostStatus: 'unknown',
+							decision: 'create',
+							reason: `forced_create:${forceInfo.reason || 'unknown'}`,
+							lastPost: postsData?.lastPost || null,
+							forced: true
+						}
+
+						return { shouldCreate: true, reason: 'forced_create', lastPost: postsData?.lastPost || null, decisionReport }
+					}
+
+					// Stale flag, remove it
+					await chrome.storage.local.remove([forceKey])
+				}
+			} catch (e) {
+				postServiceLogger.warn('[PostDataService] Failed reading force-create flag:', e)
+			}
+		}
+
 		let deletedPostId = null
 		if (userName) {
 			const deletedPostKey = `deletedPost_${userName}`
@@ -314,8 +386,12 @@ export class PostDataService {
 			const latestPost = postsToAnalyze[0];
 
 			// 1) If the MOST RECENT post is blocked/removed -> delete it, then create new.
-			const isRemoved = latestPost?.moderationStatus?.isRemoved === true
-			const isBlocked = latestPost?.moderationStatus?.isBlocked === true
+			const isRemoved =
+				latestPost?.moderationStatus?.isRemoved === true ||
+				latestPost?.isRemoved === true
+			const isBlocked =
+				latestPost?.moderationStatus?.isBlocked === true ||
+				latestPost?.isBlocked === true
 			if (isRemoved || isBlocked) {
 				const reason = isRemoved ? 'post_removed_by_moderator' : 'post_blocked'
 				postServiceLogger.log(`[PostDataService] 🗑️ DECISION: Latest post is blocked/removed (ID: ${latestPost.id}). Deleting it (then create new).`)

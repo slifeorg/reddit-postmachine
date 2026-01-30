@@ -325,6 +325,18 @@ function initializeRedditIntegration() {
 			return true
 		}
 
+		if (message.type === 'GET_POSTS') {
+			contentLogger.log('[Content Script] Received GET_POSTS:', message)
+			getPostsFromDomHelper(message.userName)
+				.then((postsInfo) => {
+					sendResponse({ success: true, data: { postsInfo } })
+				})
+				.catch((err) => {
+					sendResponse({ success: false, error: err?.message || String(err) })
+				})
+			return true
+		}
+
 		// For START_POST_CREATION, use more specific deduplication to avoid blocking valid retries
 		if (message.type === 'START_POST_CREATION') {
 			const msgKey = `${message.type}-${message.userName}-${JSON.stringify(message.postData)}`;
@@ -436,11 +448,84 @@ function initializeRedditIntegration() {
 				sendResponse({ success: true })
 				break
 
+			case 'DOM_BLOCKED_CHECK':
+				contentLogger.log('[Content Script] Received DOM_BLOCKED_CHECK for post:', message.postId)
+				// Check if the specific post is blocked in the DOM
+				const postElement = document.querySelector(`shreddit-post[id="${message.postId}"]`)
+				if (postElement) {
+					const isBlocked = postElement.textContent?.toLowerCase().includes('blocked') ||
+						postElement.textContent?.toLowerCase().includes('removed') ||
+						postElement.textContent?.toLowerCase().includes('[removed]') ||
+						postElement.querySelector('[icon-name="remove"]') !== null ||
+						postElement.querySelector('[icon-name="block"]') !== null ||
+						postElement.getAttribute('item-state') === 'blocked' ||
+						postElement.getAttribute('item-state') === 'moderator_removed'
+					
+					contentLogger.log(`[Content Script] DOM blocked check result for ${message.postId}:`, isBlocked)
+					sendResponse({ isBlocked })
+				} else {
+					contentLogger.warn(`[Content Script] Post element not found for DOM blocked check: ${message.postId}`)
+					sendResponse({ isBlocked: false })
+				}
+				break
+
 			default:
 				contentLogger.warn('Unknown message type:', message.type)
 		}
 
 		return true
+	})
+}
+
+async function getPostsFromDomHelper(userName, timeoutMs = 15000) {
+	return new Promise((resolve, reject) => {
+		let done = false
+		const requested = (userName || '').toString().replace(/^u\//i, '').trim().toLowerCase()
+
+		const cleanup = () => {
+			window.removeEventListener('message', onMessage)
+		}
+
+		const timer = setTimeout(() => {
+			if (done) return
+			done = true
+			cleanup()
+			reject(new Error('Timeout waiting for GET_POSTS result from DOM helper'))
+		}, timeoutMs)
+
+		const onMessage = (event) => {
+			try {
+				const msg = event?.data
+				if (!msg || msg.type !== 'REDDIT_POST_MACHINE_ACTION_RESULT') return
+				if (msg.action !== 'GET_POSTS') return
+				if (msg.success !== true) return
+				const data = msg.data
+				if (!data || !Array.isArray(data.posts)) return
+
+				if (requested) {
+					const author = (data.posts?.[0]?.author || '').toString().replace(/^u\//i, '').trim().toLowerCase()
+					if (author && author !== requested) return
+				}
+
+				if (done) return
+				done = true
+				clearTimeout(timer)
+				cleanup()
+				resolve(data)
+			} catch (e) {
+				if (done) return
+				done = true
+				clearTimeout(timer)
+				cleanup()
+				reject(e)
+			}
+		}
+
+		window.addEventListener('message', onMessage)
+		window.postMessage({
+			type: 'REDDIT_POST_MACHINE_GET_POSTS',
+			payload: { userName }
+		}, '*')
 	})
 }
 
@@ -1360,10 +1445,27 @@ async function capturePostsData(username) {
 							isRemoved: element.textContent?.includes('removed by the moderators') ||
 								element.querySelector('[icon-name="remove"]') !== null ||
 								element.getAttribute('item-state') === 'moderator_removed' || false,
-							// "blocked" is not always a first-class flag in Reddit DOM; we infer it conservatively
+							// Enhanced blocked detection with more indicators
 							isBlocked: (element.getAttribute('item-state') === 'blocked') ||
+								(element.getAttribute('item-state') === 'moderator_removed') ||
 								(element.textContent?.toLowerCase().includes('post blocked')) ||
-								(element.querySelector('.blocked, [class*="blocked"]') !== null) || false,
+								(element.textContent?.toLowerCase().includes('this post has been blocked')) ||
+								(element.textContent?.toLowerCase().includes('your post has been blocked')) ||
+								(element.textContent?.toLowerCase().includes('blocked')) ||
+								(element.shadowRoot?.textContent?.toLowerCase().includes('blocked')) ||
+								(element.shadowRoot?.textContent?.toLowerCase().includes('post blocked')) ||
+								(element.shadowRoot?.textContent?.toLowerCase().includes('this post has been blocked')) ||
+								(element.querySelector('.blocked, [class*="blocked"]') !== null) ||
+								(element.querySelector('[icon-name="block"]') !== null) ||
+								(element.querySelector('[icon-name="remove"]') !== null) ||
+								(element.querySelector('[data-testid*="blocked"]') !== null) ||
+								(element.querySelector('[data-testid*="removed"]') !== null) ||
+								(element.querySelector('[data-testid*="moderation"]') !== null) ||
+								(element.getAttribute('view-context') === 'blocked') ||
+								(element.getAttribute('view-context') === 'moderation') ||
+								(element.querySelector('faceplate-banner[appearance="error"]') !== null) ||
+								(element.querySelector('shreddit-post[post-state="removed"]') !== null) ||
+								(element.querySelector('shreddit-post[post-state="blocked"]') !== null) || false,
 							isLocked: element.querySelector('[icon-name="lock-fill"]') !== null ||
 								element.getAttribute('item-state') === 'locked' || false,
 							isDeleted: element.textContent?.includes('deleted by the user') ||
@@ -1835,10 +1937,27 @@ async function checkUserPosts() {
 					isRemoved: post.textContent?.includes('removed by the moderators') ||
 						post.querySelector('[icon-name="remove"]') !== null ||
 						post.getAttribute('item-state') === 'moderator_removed' || false,
-					// "blocked" is not always a first-class flag in Reddit DOM; we infer it conservatively
+					// Enhanced blocked detection with more indicators
 					isBlocked: (post.getAttribute('item-state') === 'blocked') ||
+						(post.getAttribute('item-state') === 'moderator_removed') ||
 						(post.textContent?.toLowerCase().includes('post blocked')) ||
-						(post.querySelector('.blocked, [class*="blocked"]') !== null) || false,
+						(post.textContent?.toLowerCase().includes('this post has been blocked')) ||
+						(post.textContent?.toLowerCase().includes('your post has been blocked')) ||
+						(post.textContent?.toLowerCase().includes('blocked')) ||
+						(post.shadowRoot?.textContent?.toLowerCase().includes('blocked')) ||
+						(post.shadowRoot?.textContent?.toLowerCase().includes('post blocked')) ||
+						(post.shadowRoot?.textContent?.toLowerCase().includes('this post has been blocked')) ||
+						(post.querySelector('.blocked, [class*="blocked"]') !== null) ||
+						(post.querySelector('[icon-name="block"]') !== null) ||
+						(post.querySelector('[icon-name="remove"]') !== null) ||
+						(post.querySelector('[data-testid*="blocked"]') !== null) ||
+						(post.querySelector('[data-testid*="removed"]') !== null) ||
+						(post.querySelector('[data-testid*="moderation"]') !== null) ||
+						(post.getAttribute('view-context') === 'blocked') ||
+						(post.getAttribute('view-context') === 'moderation') ||
+						(post.querySelector('faceplate-banner[appearance="error"]') !== null) ||
+						(post.querySelector('shreddit-post[post-state="removed"]') !== null) ||
+						(post.querySelector('shreddit-post[post-state="blocked"]') !== null) || false,
 					isLocked: post.querySelector('[icon-name="lock-fill"]') !== null ||
 						post.getAttribute('item-state') === 'locked' || false,
 					isDeleted: post.textContent?.includes('deleted by the user') ||
@@ -2000,7 +2119,10 @@ async function handleDeleteLastPost(userName) {
 				type: 'ACTION_COMPLETED',
 				action: 'DELETE_POST_COMPLETED',
 				success: true,
-				reason: 'no_posts_found'
+				data: {
+					userName,
+					reason: 'no_posts_found'
+				}
 			}).catch(() => { })
 			return
 		}
@@ -2016,7 +2138,10 @@ async function handleDeleteLastPost(userName) {
 				type: 'ACTION_COMPLETED',
 				action: 'DELETE_POST_COMPLETED',
 				success: false,
-				reason: 'post_element_not_found'
+				data: {
+					userName,
+					reason: 'post_element_not_found'
+				}
 			}).catch(() => { })
 			return
 		}
@@ -2032,9 +2157,12 @@ async function handleDeleteLastPost(userName) {
 				type: 'ACTION_COMPLETED',
 				action: 'DELETE_POST_COMPLETED',
 				success: true,
-				postId: mostRecentPost.id || null,
-				redditUrl: mostRecentPost.url || null,
-				title: mostRecentPost.title || null
+				data: {
+					userName,
+					postId: mostRecentPost.id || null,
+					redditUrl: mostRecentPost.url || null,
+					title: mostRecentPost.title || null
+				}
 			}).catch(() => { })
 		} else {
 			const messageDiv = createMessageDiv('❌', 'Delete Failed', 'Could not delete the post. Please try manually.', '#ff5722')
@@ -2045,7 +2173,10 @@ async function handleDeleteLastPost(userName) {
 				type: 'ACTION_COMPLETED',
 				action: 'DELETE_POST_COMPLETED',
 				success: false,
-				error: 'Could not delete the post'
+				data: {
+					userName,
+					error: 'Could not delete the post'
+				}
 			}).catch(() => { })
 		}
 
@@ -2053,6 +2184,17 @@ async function handleDeleteLastPost(userName) {
 		contentLogger.error('Error deleting last post:', error)
 		const messageDiv = createMessageDiv('❌', 'Error', 'Failed to delete last post.', '#d32f2f')
 		showTemporaryMessage(messageDiv)
+
+		// Always notify background so auto-flow can recover even if deletion threw
+		chrome.runtime.sendMessage({
+			type: 'ACTION_COMPLETED',
+			action: 'DELETE_POST_COMPLETED',
+			success: false,
+			data: {
+				userName,
+				error: error?.message || String(error)
+			}
+		}).catch(() => { })
 	}
 }
 

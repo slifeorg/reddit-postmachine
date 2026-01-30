@@ -35,7 +35,8 @@ import {
 	handleReuseRedditTab,
 	resumeAutoFlow,
 	handleCheckUserStatus,
-	handleOpenExtension
+	handleOpenExtension,
+	handlePostsUpdated
 } from './message-handlers.js'
 
 import {
@@ -71,6 +72,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 	bgLogger.log('Background received message:', message.type, senderTabId ? `from tab ${senderTabId}` : 'from popup')
 
 	switch (message.type) {
+			// Content-script internal events that we intentionally ignore at the background switch level.
+			// (Some flows attach their own temporary listeners, e.g. waiting for FRESH_POSTS_COLLECTED.)
+			case 'WORKFLOW_NEXT_STEP':
+			case 'FRESH_POSTS_COLLECTED':
+				sendResponse({ received: true, ignored: true })
+				return true
+			case 'POSTS_UPDATED':
+				// If latest post becomes blocked/removed during monitoring, trigger immediate delete->create.
+				handlePostsUpdated(senderTabId, message.data, sendResponse)
+				return true
+
 		case 'GET_REDDIT_INFO':
 			handleGetRedditInfo(sendResponse)
 			break
@@ -221,6 +233,8 @@ export default bexBackground((bridge) => {
 		try {
 			const redditTabs = await chrome.tabs.query({ url: '*://*.reddit.com/*' });
 			for (const tab of redditTabs) {
+				// Never "adopt" Reddit chat tabs into the automation state machine.
+				if (tab?.url && tab.url.includes('chat.reddit.com')) continue
 				if (!tabStates[tab.id]) {
 					const syncResult = await chrome.storage.sync.get(['redditUser']);
 					const userName = syncResult.redditUser?.seren_name;

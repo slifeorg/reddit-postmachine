@@ -185,6 +185,28 @@ const RedditDOMHelper = {
 				getAttr("item-state") === "moderator_removed" ||
 				!!post.querySelector('[icon-name="remove"]');
 
+			// Enhanced blocked status detection
+			const isBlocked = getAttr("item-state") === "blocked" ||
+				getAttr("item-state") === "moderator_removed" ||
+				post.textContent?.toLowerCase().includes("post blocked") ||
+				post.textContent?.toLowerCase().includes("this post has been blocked") ||
+				post.textContent?.toLowerCase().includes("your post has been blocked") ||
+				post.textContent?.toLowerCase().includes("blocked") ||
+				post.shadowRoot?.textContent?.toLowerCase().includes("blocked") ||
+				post.shadowRoot?.textContent?.toLowerCase().includes("post blocked") ||
+				post.shadowRoot?.textContent?.toLowerCase().includes("this post has been blocked") ||
+				post.querySelector('.blocked, [class*="blocked"]') !== null ||
+				post.querySelector('[icon-name="block"]') !== null ||
+				post.querySelector('[icon-name="remove"]') !== null ||
+				getAttr("view-context") === "blocked" ||
+				getAttr("view-context") === "moderation" ||
+				!!post.querySelector('[data-testid*="blocked"]') ||
+				!!post.querySelector('[data-testid*="removed"]') ||
+				!!post.querySelector('[data-testid*="moderation"]') ||
+				!!post.querySelector('faceplate-banner[appearance="error"]') ||
+				!!post.querySelector('shreddit-post[post-state="removed"]') ||
+				!!post.querySelector('shreddit-post[post-state="blocked"]');
+
 			return {
 				id: post.id || "",
 				title: getAttr("post-title") || post.querySelector("h3")?.textContent?.trim() || "",
@@ -193,6 +215,7 @@ const RedditDOMHelper = {
 				author: getAttr("author") || "",
 				score: parseInt(getAttr("score")) || 0,
 				isRemoved: isRemoved,
+				isBlocked: isBlocked,
 				// We do NOT send the DOM element back to content-script/background
 				// We keep it internally or find it again by ID for deletion
 				_domId: post.id

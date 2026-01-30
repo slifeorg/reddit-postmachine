@@ -158,7 +158,7 @@
 
 			<!-- Version footer -->
 			<div class="q-mt-xs q-pt-none text-center text-caption text-grey-6">
-				v0.9.6
+				v0.9.9
 			</div>
 
 		</div>
