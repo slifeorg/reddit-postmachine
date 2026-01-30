@@ -954,6 +954,7 @@ async function selectFlairByName(flairName) {
 	}
 }
 
+
 // Main function to handle automatic flair selection after title is filled
 async function handleAutomaticFlairSelection() {
 	try {
@@ -1104,6 +1105,7 @@ async function handleFlairSelection(postData) {
 		return false
 	}
 }
+
 
 export {
 	areFlairsAvailable,

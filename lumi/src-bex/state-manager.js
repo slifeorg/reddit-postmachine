@@ -1,4 +1,6 @@
-import { stateLogger } from "./logger.js";/**
+import { stateLogger } from "./logger.js";
+
+/**
  * State Manager Module
  * Handles automation state persistence, recovery, and tab state tracking
  */

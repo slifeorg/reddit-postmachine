@@ -165,13 +165,13 @@ function getLatestPostModerationSignal(postsInfo) {
 	const isRemoved = latest?.moderationStatus?.isRemoved === true || latest?.isRemoved === true
 	const isBlocked = latest?.moderationStatus?.isBlocked === true || latest?.isBlocked === true
 	const isDeleted = latest?.isDeleted === true
-	
+
 	// Additional checks for Reddit's moderation indicators
 	const hasRemovalReason = latest?.removalReason || latest?.moderationStatus?.removalReason
 	const hasBanMessage = latest?.banMessage || latest?.moderationStatus?.banMessage
 	const isArchived = latest?.isArchived === true
 	const isLocked = latest?.isLocked === true && latest?.numComments === 0 // Locked with no comments might indicate moderation
-	
+
 	// Additional checks for blocked posts - more comprehensive detection
 	const hasBlockedText = latest?.title?.toLowerCase().includes('[removed]') ||
 		latest?.title?.toLowerCase().includes('[blocked]') ||
@@ -181,11 +181,11 @@ function getLatestPostModerationSignal(postsInfo) {
 		latest?.itemState === 'moderator_removed'
 	const hasBlockedViewContext = latest?.viewContext?.includes('blocked') ||
 		latest?.viewContext?.includes('removed')
-	
+
 	// Check if post is in a moderated state
-	const isModerated = isRemoved || isBlocked || isDeleted || hasRemovalReason || hasBanMessage || 
+	const isModerated = isRemoved || isBlocked || isDeleted || hasRemovalReason || hasBanMessage ||
 		hasBlockedText || hasBlockedItemState || hasBlockedViewContext
-	
+
 	bgLogger.log(`[BG] 🔍 Enhanced moderation check for post "${latest?.title?.substring(0, 50)}...":`, {
 		isRemoved, isBlocked, isDeleted, hasRemovalReason, hasBanMessage, isArchived, isLocked,
 		hasBlockedText, hasBlockedItemState, hasBlockedViewContext,
@@ -195,7 +195,7 @@ function getLatestPostModerationSignal(postsInfo) {
 		itemState: latest?.itemState,
 		viewContext: latest?.viewContext
 	})
-	
+
 	if (isModerated) {
 		let reason = 'unknown_moderation'
 		if (isRemoved) reason = 'post_removed_by_moderator'
@@ -206,10 +206,10 @@ function getLatestPostModerationSignal(postsInfo) {
 		else if (hasBlockedText) reason = 'post_title_blocked'
 		else if (hasBlockedItemState) reason = 'post_state_blocked'
 		else if (hasBlockedViewContext) reason = 'post_context_blocked'
-		
+
 		return { shouldDelete: true, reason, latestPost: latest }
 	}
-	
+
 	return { shouldDelete: false, reason: null, latestPost: latest }
 }
 
@@ -349,7 +349,7 @@ export function startPeriodicMonitoringCheck(tabId, userName) {
 				if (response && response.success && response.data && response.data.postsInfo) {
 					bgLogger.log(`[BG] 📊 Periodic check: Received posts data, analyzing...`)
 					const signal = getLatestPostModerationSignal(response.data.postsInfo)
-					
+
 					// Enhanced logging for debugging
 					bgLogger.log(`[BG] 🔍 Periodic check moderation analysis:`, {
 						shouldDelete: signal.shouldDelete,
@@ -360,31 +360,31 @@ export function startPeriodicMonitoringCheck(tabId, userName) {
 						isRemoved: signal.latestPost?.isRemoved,
 						itemState: signal.latestPost?.itemState
 					})
-					
-					// Additional safety check: If API doesn't show blocked but we're in monitoring, 
+
+					// Additional safety check: If API doesn't show blocked but we're in monitoring,
 					// do an extra DOM check to catch any missed blocks
 					if (!signal.shouldDelete && signal.latestPost) {
-						chrome.tabs.sendMessage(tabId, { 
+						chrome.tabs.sendMessage(tabId, {
 							type: 'DOM_BLOCKED_CHECK',
-							postId: signal.latestPost.id 
+							postId: signal.latestPost.id
 						}, (domResponse) => {
 							if (chrome.runtime.lastError) {
 								bgLogger.log(`[BG] DOM check failed: ${chrome.runtime.lastError.message}`)
 								return
 							}
-							
+
 							if (domResponse && domResponse.isBlocked) {
 								bgLogger.warn(`[BG] 🚨 DOM CHECK: Post appears blocked in DOM but not in API. Triggering delete.`)
 								// Clear the periodic interval since we're handling this now
 								clearInterval(intervalId)
 								periodicMonitoringIntervals.delete(key)
-								
+
 								// Trigger the same delete logic as POSTS_UPDATED
 								handlePostsUpdated(tabId, response.data, () => {})
 							}
 						})
 					}
-					
+
 					if (signal.shouldDelete) {
 						bgLogger.warn(`[BG] 🚨 PERIODIC CHECK: Latest post is ${signal.reason}. Triggering immediate delete.`)
 
@@ -404,8 +404,7 @@ export function startPeriodicMonitoringCheck(tabId, userName) {
 		} catch (error) {
 			bgLogger.error(`[BG] Error in periodic monitoring check for ${userName}:`, error)
 		}
-	}, 15000) // Changed from 30000 to 15000 (15 seconds) for faster blocked post detection
-
+	}, 15000)
 	periodicMonitoringIntervals.set(key, intervalId)
 	bgLogger.log(`[BG] 🔄 Started periodic monitoring for ${userName} (every 15 seconds) - Interval ID: ${intervalId}`)
 }
@@ -473,14 +472,14 @@ export async function sendGetPosts(tabId, userName, source) {
 	const isAfterReload = source === 'after_reload' || source === 'direct_navigation';
 	const maxRetries = isAfterReload ? 20 : 12;
 	const initialDelay = isAfterReload ? 1000 : 500;
-	
+
 	bgLogger.log(`[BG] 📡 Sending GET_POSTS to tab ${tabId} (${source}) - retries: ${maxRetries}, delay: ${initialDelay}ms`);
-	
+
 	const ready = await waitForContentScript(tabId, { retries: maxRetries, initialDelayMs: initialDelay })
 	if (!ready) {
 		bgLogger.error(`[BG] Content script NOT reachable after ${maxRetries} retries in tab ${tabId}, cannot send GET_POSTS (${source})`)
 		logToTab(tabId, `Content script not reachable; skipping post collection (${source}).`)
-		
+
 		// Don't delete tabStates immediately - let Watchdog handle it
 		if (!isAfterReload) {
 			// Only delete state if it's not a critical after-reload scenario
@@ -499,7 +498,7 @@ export async function sendGetPosts(tabId, userName, source) {
 		return true
 	} catch (err) {
 		bgLogger.error(`[BG] Failed to send GET_POSTS (${source}):`, err)
-		
+
 		// Don't delete tabStates immediately in after-reload scenarios
 		if (!isAfterReload) {
 			delete tabStates[tabId]
@@ -1323,17 +1322,17 @@ async function handleGetPostsAction(tabId, state, data) {
 						bgLogger.log('[BG] ⏰ MONITORING: Scheduled check triggered. Reloading and running periodic check.');
 						bgLogger.log(`[BG] 🎯 Timeout fired at: ${new Date().toLocaleTimeString()}`);
 						bgLogger.log(`[BG] 🔍 This check will determine if monitoring window ended and trigger DELETE + CREATE.`);
-						
+
 						// IMPORTANT: Stop periodic monitoring BEFORE reload to prevent race conditions
 						bgLogger.log(`[BG] 🛑 Stopping periodic monitoring before reload for ${state.userName}`);
 						stopPeriodicMonitoringCheck(tabId, state.userName);
-						
+
 						// Mark tab as reloading to prevent periodic checks from interfering
 						if (tabStates[tabId]) {
 							tabStates[tabId].isReloading = true;
 							bgLogger.log(`[BG] 📝 Marked tab ${tabId} as reloading`);
 						}
-						
+
 						// Reload page first to get fresh data
 						chrome.tabs.reload(tabId, (reloadResult) => {
 							if (chrome.runtime.lastError) {
@@ -1344,23 +1343,23 @@ async function handleGetPostsAction(tabId, state, data) {
 								}
 								return;
 							}
-							
+
 							bgLogger.log(`[BG] 🔄 Tab ${tabId} reload initiated successfully`);
-							
+
 							// Then trigger check after a delay for page to load
 							setTimeout(() => {
 								bgLogger.log(`[BG] 💡 If post is now > 20 mins old, this should delete it and then create a new post`);
-								
+
 								// Clear reloading flag after delay
 								if (tabStates[tabId]) {
 									tabStates[tabId].isReloading = false;
 									bgLogger.log(`[BG] ✅ Cleared reloading flag for tab ${tabId}`);
 								}
-								
+
 								// Restart periodic monitoring after reload
 								bgLogger.log(`[BG] 🔄 Restarting periodic monitoring after reload for ${state.userName}`);
 								startPeriodicMonitoringCheck(tabId, state.userName);
-								
+
 								// Trigger the actual check
 								triggerPeriodicCheck(tabId, state.userName);
 							}, 5000); // Increased to 5s to ensure content script initialization

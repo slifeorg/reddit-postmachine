@@ -223,8 +223,8 @@ function stripUrls(text) {
 function findUsernameViaViewProfile() {
 	try {
 		// Use deepQuery capabilities via document.querySelectorAll for simplicity or custom walker if needed
-		// The original code used document.querySelectorAll('span') which is fine for flat checking, 
-		// but let's check if we need to pierce shadow DOM. 
+		// The original code used document.querySelectorAll('span') which is fine for flat checking,
+		// but let's check if we need to pierce shadow DOM.
 		// For now, mirroring my-content-script exactly.
 		const viewProfileSpans = Array.from(document.querySelectorAll('span')).filter(el => el.textContent === 'View Profile');
 		for (const span of viewProfileSpans) {
@@ -745,7 +745,7 @@ async function handleMatureContentDialog() {
 			submitLogger.log(`🔍 [MATURE_CONTENT] Attempt ${attempt + 1}/${maxAttempts}...`)
 
 			// Look for the NSFW action button with the specific ID and text content
-			const nsfwButton = qs('#nsfw-action-button button') || 
+			const nsfwButton = qs('#nsfw-action-button button') ||
 								deepQuery('#nsfw-action-button button')
 
 			if (nsfwButton && nsfwButton.textContent.includes('Yes, I\'m Over 18')) {
@@ -894,10 +894,10 @@ async function submitPost() {
 			await sleep(200);
 			btnToClick.click();
 			submitLogger.log('🚀 [SUBMIT] Post button clicked, now checking for Mature Content dialog...');
-			
+
 			// Handle Mature Content warning dialog that may appear after submit
 			await handleMatureContentDialog();
-			
+
 			await handleRuleViolationDialog();
 			return true;
 		}
@@ -908,10 +908,10 @@ async function submitPost() {
 		if (fallbackBtn) {
 			fallbackBtn.click();
 			submitLogger.log('🚀 [SUBMIT] Fallback post button clicked, now checking for Mature Content dialog...');
-			
+
 			// Handle Mature Content warning dialog that may appear after submit
 			await handleMatureContentDialog();
-			
+
 			return true;
 		}
 
@@ -1481,6 +1481,7 @@ function handleStartPostCreation(userName, postData) {
 		submitLogger.error('Error requesting post tab creation:', error)
 	})
 }
+
 
 // Message listener
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
