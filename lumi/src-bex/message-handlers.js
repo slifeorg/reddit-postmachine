@@ -404,7 +404,7 @@ export function startPeriodicMonitoringCheck(tabId, userName) {
 		} catch (error) {
 			bgLogger.error(`[BG] Error in periodic monitoring check for ${userName}:`, error)
 		}
-	}, 15000)
+	}, 15000) // Changed from 30000 to 15000 (15 seconds) for faster blocked post detection
 
 	periodicMonitoringIntervals.set(key, intervalId)
 	bgLogger.log(`[BG] 🔄 Started periodic monitoring for ${userName} (every 15 seconds) - Interval ID: ${intervalId}`)

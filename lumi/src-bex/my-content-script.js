@@ -346,7 +346,7 @@ function initializeRedditIntegration() {
 				return true;
 			}
 			recentMessages.add(msgKey);
-			setTimeout(() => recentMessages.delete(msgKey), 5000);
+			setTimeout(() => recentMessages.delete(msgKey), 5000); // Longer timeout for post creation
 		} else {
 			// General debounce for other message types
 			const msgKey = `${message.type}-recent`;

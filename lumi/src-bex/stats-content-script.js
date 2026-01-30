@@ -1097,7 +1097,7 @@ async function handleUserNotFoundNavigation() {
 
 		statsLogger.log('Found user dropdown button, clicking to open menu')
 		dropdownButton.click()
-		await sleep(1000)
+		await sleep(1000) // Wait for menu to appear
 
 		// Step 2: Find and click "View Profile" link in the dropdown menu
 		const viewProfileLink = qs('a[href*="/u/"], a[href*="/user/"]') ||

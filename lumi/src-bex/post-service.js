@@ -15,7 +15,7 @@ import { AutoFlowStateManager } from './state-manager.js'
 export class PostDataService {
 	static async generatePost(agentName) {
 		const maxRetries = 3
-		const retryDelay = 1000
+		const retryDelay = 1000 // 1 second base delay
 
 		// Some backends expect agent with or without "u/" prefix.
 		// We'll try both to avoid hard-coupling the extension to one format.
