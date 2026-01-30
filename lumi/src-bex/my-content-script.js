@@ -346,7 +346,7 @@ function initializeRedditIntegration() {
 				return true;
 			}
 			recentMessages.add(msgKey);
-			setTimeout(() => recentMessages.delete(msgKey), 5000); // Longer timeout for post creation
+			setTimeout(() => recentMessages.delete(msgKey), 5000);
 		} else {
 			// General debounce for other message types
 			const msgKey = `${message.type}-recent`;
@@ -460,7 +460,7 @@ function initializeRedditIntegration() {
 						postElement.querySelector('[icon-name="block"]') !== null ||
 						postElement.getAttribute('item-state') === 'blocked' ||
 						postElement.getAttribute('item-state') === 'moderator_removed'
-					
+
 					contentLogger.log(`[Content Script] DOM blocked check result for ${message.postId}:`, isBlocked)
 					sendResponse({ isBlocked })
 				} else {

@@ -940,7 +940,7 @@ async function notifyWorkflowNextStep({ success, postData, redditUrl, redditPost
 			error: error || null
 		})
 	} catch (_) {
-		// do nothing
+
 	}
 }
 

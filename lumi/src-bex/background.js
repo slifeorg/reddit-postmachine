@@ -296,5 +296,5 @@ export default bexBackground((bridge) => {
 			delete tabStates[tabIdStr]
 			restartAutoFlowFromBeginning(userName).catch(() => { })
 		}
-	}, 15000)) // Check every 15s for better responsiveness
+	}, 15000))
 })

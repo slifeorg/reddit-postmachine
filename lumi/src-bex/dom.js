@@ -87,7 +87,7 @@ const RedditDOMHelper = {
 		// 3. Brute force check all elements with shadowRoots (expensive but necessary for some layouts)
 		const all = root.querySelectorAll('*');
 		for (const el of all) {
-			if (el.shadowRoot && el.tagName !== 'SHREDDIT-FEED') { // feed already checked
+			if (el.shadowRoot && el.tagName !== 'SHREDDIT-FEED') {
 				this.collectAllPostsRecursive(el.shadowRoot, results);
 			}
 		}

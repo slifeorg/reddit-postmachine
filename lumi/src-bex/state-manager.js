@@ -23,7 +23,7 @@ export const processedTabs = new Set()
 
 // Periodic check configuration - COMMENTED OUT to fix 3-minute delay issue
 // export const CHECK_INTERVAL = 121000
-export const CHECK_INTERVAL = 30000 // Reduced to 30 seconds for faster response
+export const CHECK_INTERVAL = 30000
 let checkIntervalId = null
 
 // Stall watchdog configuration

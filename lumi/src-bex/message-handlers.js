@@ -405,6 +405,7 @@ export function startPeriodicMonitoringCheck(tabId, userName) {
 			bgLogger.error(`[BG] Error in periodic monitoring check for ${userName}:`, error)
 		}
 	}, 15000)
+
 	periodicMonitoringIntervals.set(key, intervalId)
 	bgLogger.log(`[BG] 🔄 Started periodic monitoring for ${userName} (every 15 seconds) - Interval ID: ${intervalId}`)
 }

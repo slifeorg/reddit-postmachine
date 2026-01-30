@@ -1106,7 +1106,6 @@ async function handleFlairSelection(postData) {
 	}
 }
 
-
 export {
 	areFlairsAvailable,
 	getFlairButton,

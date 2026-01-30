@@ -15,7 +15,7 @@ import { AutoFlowStateManager } from './state-manager.js'
 export class PostDataService {
 	static async generatePost(agentName) {
 		const maxRetries = 3
-		const retryDelay = 1000 // 1 second base delay
+		const retryDelay = 1000
 
 		// Some backends expect agent with or without "u/" prefix.
 		// We'll try both to avoid hard-coupling the extension to one format.
@@ -113,17 +113,17 @@ export class PostDataService {
 						// Extract post data from Frappe response
 						if (frappeData && frappeData.data) {
 							const postData = frappeData.data
-							
+
 							// Apply title formatting rules from CSV templates
 							let processedTitle = postData.title || 'Generated Post'
 							processedTitle = TitleFormatter.applyTitleFormattingRules(processedTitle, postData.subreddit_name || postData.subreddit)
-							
+
 							// Validate the processed title
 							const validation = TitleFormatter.validateTitle(processedTitle, postData.subreddit_name || postData.subreddit)
 							if (!validation.isValid) {
 								postServiceLogger.warn('[PostDataService] Title validation issues:', validation.issues)
 							}
-							
+
 							const mapped = {
 								title: processedTitle,
 								body: postData.body_text || postData.content || postData.body || '',
@@ -155,17 +155,17 @@ export class PostDataService {
 						data.message.docs.length > 0
 					) {
 						const apiPost = data.message.docs[0]
-						
+
 						// Apply title formatting rules to legacy format as well
 						let processedTitle = apiPost.title || 'Generated Post'
 						processedTitle = TitleFormatter.applyTitleFormattingRules(processedTitle, apiPost.subreddit)
-						
+
 						// Validate the processed title
 						const validation = TitleFormatter.validateTitle(processedTitle, apiPost.subreddit)
 						if (!validation.isValid) {
 							postServiceLogger.warn('[PostDataService] Legacy title validation issues:', validation.issues)
 						}
-						
+
 						return {
 							title: processedTitle,
 							body: apiPost.content || apiPost.body || '',
